@@ -1,0 +1,36 @@
+# An out-of-tree MLIR dialect for Bril
+
+This is an out-of-tree [MLIR](https://mlir.llvm.org/) dialect for [Bril](https://capra.cs.cornell.edu/bril/intro.html) along with a standalone `opt`-like tool to operate on Bril dialect.
+
+## Building
+
+This setup assumes that you have built LLVM and MLIR in `$BUILD_DIR` and installed them to `$PREFIX`:
+
+```sh
+git clone https://github.com/llvm/llvm-project.git
+cd llvm-project
+mkdir build
+cd build
+cmake -G Ninja ../llvm \
+   -DLLVM_ENABLE_PROJECTS=mlir \
+   -DLLVM_BUILD_EXAMPLES=ON \
+   -DLLVM_TARGETS_TO_BUILD="Native;NVPTX;AMDGPU" \
+   -DCMAKE_BUILD_TYPE=Release \
+   -DLLVM_ENABLE_ASSERTIONS=ON \
+   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_ENABLE_LLD=ON \
+   -DLLVM_CCACHE_BUILD=ON \
+   -DCMAKE_INSTALL_PREFIX=$HOME/opt/llvm \
+   -DLLVM_INSTALL_UTILS=ON
+cmake --build . --target install
+```
+
+To build `brilir`:
+
+```sh
+export BUILD_DIR=$HOME/repos/llvm-project/build
+export PREFIX=$HOME/opt/llvm
+mkdir build
+cd build
+cmake -G Ninja .. -DMLIR_DIR=$PREFIX/lib/cmake/mlir -DLLVM_EXTERNAL_LIT=$BUILD_DIR/bin/llvm-lit -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_CCACHE_BUILD=ON
+cmake --build .
+```
