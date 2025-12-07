@@ -15,9 +15,11 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
 #include "bril/BrilDialect.h"
+#include "bril/BrilPasses.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
+  mlir::bril::registerPasses();
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::bril::BrilDialect,
