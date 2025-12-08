@@ -18,6 +18,18 @@ include "bril/BrilDialect.td"
 
 def ValidBrilType : AnyTypeOf<[SI32, I1]>;
 
+def ConstantOp : Bril_Op<"const", [Pure]> {
+    let summary = "Defines a constant value.";
+    let description = [{
+        The `bril.const` operation defines a constant integer or boolean value.
+    }];
+
+    let arguments = (ins AnyAttrOf<[SI32Attr, I1Attr]>:$value);
+    let results = (outs ValidBrilType);
+
+    let builders = [OpBuilder<(ins "int":$value)>, OpBuilder<(ins "bool":$value)>];
+}
+
 def AddOp : Bril_Op<"add", [Pure, SameOperandsAndResultType]> {
     let summary = "Adds two integers.";
     let description = [{

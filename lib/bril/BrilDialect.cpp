@@ -29,3 +29,15 @@ void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
                    FunctionType type) {
   buildWithEntryBlock(builder, state, name, type, {}, type.getInputs());
 }
+
+void ConstantOp::build(OpBuilder &builder, OperationState &state,
+                         int32_t value) {
+  state.addAttribute("value", builder.getI32IntegerAttr(value));
+  state.addTypes(builder.getIntegerType(32));
+}
+
+void ConstantOp::build(OpBuilder &builder, OperationState &state,
+                         bool value) {
+  state.addAttribute("value", builder.getBoolAttr(value));
+  state.addTypes(builder.getIntegerType(1));
+}
