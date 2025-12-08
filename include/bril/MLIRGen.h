@@ -15,17 +15,11 @@
 #ifndef BRIL_MLIRGEN_H
 #define BRIL_MLIRGEN_H
 
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OwningOpRef.h"
 #include <memory>
-
-namespace mlir {
-class MLIRContext;
-template <typename OpTy> class OwningOpRef;
-class ModuleOp;
-} // namespace mlir
-
-namespace nlohmann {
-class json;
-}
+#include <nlohmann/json.hpp>
 
 namespace bril {
 class ModuleAST;

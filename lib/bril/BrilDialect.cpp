@@ -26,8 +26,9 @@ void BrilDialect::initialize() {
 }
 
 void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
-                   FunctionType type) {
-  buildWithEntryBlock(builder, state, name, type, {}, type.getInputs());
+                   FunctionType type,
+                   llvm::ArrayRef<mlir::NamedAttribute> attrs) {
+  buildWithEntryBlock(builder, state, name, type, attrs, type.getInputs());
 }
 
 void ConstantOp::build(OpBuilder &builder, OperationState &state,

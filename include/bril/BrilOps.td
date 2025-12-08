@@ -217,7 +217,7 @@ def FuncOp : Bril_Op<"func", [FunctionOpInterface, IsolatedFromAbove]> {
     }];
 
     let arguments = (ins
-        SymbolNameAttr:$name,
+        SymbolNameAttr:$sym_name,
         TypeAttrOf<FunctionType>:$function_type,
         OptionalAttr<DictArrayAttr>:$arg_attrs,
         OptionalAttr<DictArrayAttr>:$res_attrs
@@ -240,7 +240,8 @@ def FuncOp : Bril_Op<"func", [FunctionOpInterface, IsolatedFromAbove]> {
     Region *getCallableRegion() { return &getBody(); }
   }];
 
-    let builders = [OpBuilder<(ins "StringRef":$name, "FunctionType":$type)>];
+    let builders = [OpBuilder<(ins "StringRef":$name, "FunctionType":$type, CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>];
+    let skipDefaultBuilders = 1;
 }
 
 def RetOp : Bril_Op<"ret", [Pure, Terminator, HasParent<"FuncOp">]> {
