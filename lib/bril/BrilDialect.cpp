@@ -24,3 +24,8 @@ void BrilDialect::initialize() {
 #include "bril/BrilOps.cpp.inc"
       >();
 }
+
+void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
+                   FunctionType type) {
+  buildWithEntryBlock(builder, state, name, type, {}, type.getInputs());
+}

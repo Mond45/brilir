@@ -227,6 +227,8 @@ def FuncOp : Bril_Op<"func", [FunctionOpInterface, IsolatedFromAbove]> {
     /// Returns the region on the function operation that is callable.
     Region *getCallableRegion() { return &getBody(); }
   }];
+
+    let builders = [OpBuilder<(ins "StringRef":$name, "FunctionType":$type)>];
 }
 
 def RetOp : Bril_Op<"ret", [Pure, Terminator, HasParent<"FuncOp">]> {
