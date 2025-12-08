@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "bril/MLIRGen.h"
-#include "bril/BrilDialect.h"
 #include "bril/BrilOps.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -29,46 +28,23 @@
 #include "mlir/Support/LLVM.h"
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
-#include <functional>
+#include <cstdlib>
 #include <nlohmann/json_fwd.hpp>
-#include <numeric>
-#include <optional>
+#include <unordered_map>
 #include <vector>
 
 using namespace mlir::bril;
 using namespace bril;
 
-using llvm::ArrayRef;
-using llvm::cast;
-using llvm::dyn_cast;
-using llvm::isa;
-using llvm::ScopedHashTableScope;
 using llvm::SmallVector;
 using llvm::StringRef;
-using llvm::Twine;
-
-namespace llvm {
-template <> struct DenseMapInfo<std::string> {
-  static inline std::string getEmptyKey() { return ""; }
-
-  static inline std::string getTombstoneKey() { return "\0"; }
-
-  static unsigned getHashValue(const std::string &value) {
-    return std::hash<std::string>()(value);
-  }
-
-  static bool isEqual(const std::string &lhs, const std::string &rhs) {
-    return lhs == rhs;
-  }
-};
-} // namespace llvm
 
 namespace {
 
@@ -79,38 +55,54 @@ namespace {
 /// analysis and transformation based on these high level semantics.
 class MLIRGenImpl {
 public:
-  MLIRGenImpl(mlir::MLIRContext &context) : builder(&context) {}
+  MLIRGenImpl(mlir::MLIRContext &context) : builder(&context) {
+    DEBUG = getenv("DEBUG") != nullptr;
+  }
 
   mlir::OwningOpRef<mlir::ModuleOp> mlirGen(nlohmann::json &json) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGen\n";
     // Create the module.
     theModule = mlir::ModuleOp::create(builder.getUnknownLoc());
 
     for (auto &funcJson : json["functions"]) {
+      labelToBlock.clear();
+      blockList.clear();
+      blockToLabel.clear();
+      symbolTable.clear();
       if (llvm::failed(mlirGenFunction(funcJson))) {
         theModule->emitError("failed to generate function");
         return nullptr;
       }
     }
 
-    // TODO: uncomment this
-    // if (llvm::failed(mlir::verify(theModule))) {
-    //   theModule->emitError("module verification failed");
-    //   return nullptr;
-    // }
+    if (llvm::failed(mlir::verify(theModule))) {
+      theModule->emitError("module verification failed");
+      return nullptr;
+    }
 
     return theModule;
   }
 
 private:
+  struct BlockInfo {
+    mlir::Block *block;
+    llvm::SmallVector<std::string, 4> blockArgs;
+    llvm::StringMap<mlir::Value> ssaSets;
+  };
+
   mlir::OpBuilder builder;
   mlir::ModuleOp theModule;
-  llvm::ScopedHashTable<std::string, mlir::Value> symbolTable;
-  llvm::ScopedHashTable<std::string, mlir::Block *> labelToBlock;
+  std::unordered_map<std::string, mlir::Value> symbolTable;
+  std::unordered_map<std::string, BlockInfo> labelToBlock;
+  std::unordered_map<mlir::Block *, std::string> blockToLabel;
+  std::vector<mlir::Block *> blockList;
+  bool DEBUG;
 
   llvm::LogicalResult declare(std::string var, mlir::Value value) {
     if (symbolTable.count(var))
       return mlir::failure();
-    symbolTable.insert(var, value);
+    symbolTable[var] = value;
     return mlir::success();
   }
 
@@ -146,12 +138,17 @@ private:
       }
     }
 
+    if (!currentBlock.empty()) {
+      blocks.push_back(currentBlock);
+    }
+
     return blocks;
   }
 
   llvm::LogicalResult mlirGenFunction(nlohmann::json &funcJson) {
-    ScopedHashTableScope<std::string, mlir::Value> varScope(symbolTable);
-    ScopedHashTableScope<std::string, mlir::Block *> labelScope(labelToBlock);
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenFunction "
+                   << funcJson["name"].get<std::string>() << "\n";
 
     auto funcName = funcJson["name"].get<std::string>();
 
@@ -183,49 +180,80 @@ private:
       }
     }
 
-    builder.setInsertionPointToStart(&entryBlock);
+    builder.setInsertionPointToEnd(&entryBlock);
 
     auto blocks = splitBlocks(funcJson["instrs"]);
 
-    // TODO: first pass to create all blocks and map labels
+    bool firstBlock = true;
     for (auto &block : blocks) {
       if (block.front().contains("label")) {
+        auto labelName = block.front()["label"].get<std::string>();
+        auto *mlirBlock = firstBlock ? &entryBlock : func.addBlock();
+        llvm::SmallVector<std::string, 4> blockArgNames;
 
+        for (auto &instr : block) {
+          // collect all block arguments from 'get' instructions
+          if (instr.contains("op") && instr["op"] == "get") {
+            auto blockArg = mlirBlock->addArgument(
+                getType(instr["type"].get<std::string>()),
+                builder.getUnknownLoc());
+            blockArgNames.push_back(instr["dest"].get<std::string>());
+            if (llvm::failed(
+                    declare(instr["dest"].get<std::string>(), blockArg))) {
+              func.emitError("failed to declare block argument ");
+              return llvm::failure();
+            }
+          }
+        }
+
+        labelToBlock[labelName] = BlockInfo{mlirBlock, blockArgNames, {}};
+        blockToLabel[mlirBlock] = labelName;
+
+        blockList.push_back(mlirBlock);
       } else {
+        auto *mlirBlock = firstBlock ? &entryBlock : func.addBlock();
+        blockList.push_back(mlirBlock);
       }
+      firstBlock = false;
     }
 
-    for (auto &block : blocks) {
-      // if (block.front().contains("label")) {
-      //   auto labelName = block.front()["label"].get<std::string>();
-      //   auto *mlirBlock = func.addBlock();
-
-      //   for (auto &instr : block) {
-      //     if (instr.contains("op") && instr["op"] == "get") {
-      //       auto blockArg = mlirBlock->addArgument(
-      //           getType(instr["type"].get<std::string>()),
-      //           builder.getUnknownLoc());
-      //       if (llvm::failed(
-      //               declare(instr["dest"].get<std::string>(), blockArg))) {
-      //         func.emitError("failed to declare block argument ");
-      //         return llvm::failure();
-      //       }
-      //     }
-      //   }
-
-      //   labelToBlock.insert(labelName, mlirBlock);
-      //   builder.setInsertionPointToStart(mlirBlock);
-
-      //   block.erase(block.begin());
-      // } else {
-      //   auto *mlirBlock = func.addBlock();
-      //   builder.setInsertionPointToStart(mlirBlock);
-      // }
-
-      for (auto &instr : block) {
-        if (llvm::failed(mlirGenInstruction(instr))) {
+    for (auto [blockIdx, block] : llvm::enumerate(blocks)) {
+      BlockInfo *blockInfo = nullptr;
+      if (block.front().contains("label")) {
+        auto labelName = block.front()["label"].get<std::string>();
+        if (!labelToBlock.count(labelName)) {
+          llvm::errs() << "Undefined label: " << labelName << "\n";
+          return llvm::failure();
+        }
+        blockInfo = &labelToBlock[labelName];
+      }
+      builder.setInsertionPointToEnd(blockList[blockIdx]);
+      for (auto instr : block) {
+        if (llvm::failed(mlirGenInstruction(instr, blockInfo))) {
           func.emitError("failed to generate instruction");
           return llvm::failure();
+        }
+      }
+
+      if ((block.back().contains("op") && block.back()["op"] != "br" &&
+           block.back()["op"] != "jmp" && block.back()["op"] != "ret") ||
+          block.back().contains("label")) {
+        // create jmp to the next block if it exists
+        if (blockIdx + 1 < blockList.size()) {
+          nlohmann::json jmpJson = {
+              {"labels", {blockToLabel[blockList[blockIdx + 1]]}},
+              {"op", "jmp"}};
+          if (llvm::failed(mlirGenJmp(jmpJson, blockInfo))) {
+            func.emitError("failed to generate jmp to next block");
+            return llvm::failure();
+          }
+        } else {
+          // otherwise just generate an empty ret
+          nlohmann::json retJson = {{"op", "ret"}};
+          if (llvm::failed(mlirGenRet(retJson))) {
+            func.emitError("failed to generate ret at end of function");
+            return llvm::failure();
+          }
         }
       }
     }
@@ -233,16 +261,27 @@ private:
     return llvm::success();
   }
 
-  llvm::LogicalResult mlirGenInstruction(nlohmann::json &instrJson) {
+  llvm::LogicalResult mlirGenInstruction(nlohmann::json &instrJson,
+                                         BlockInfo *blockInfo) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenInstruction "
+                   << instrJson.dump() << " " << blockInfo << "\n";
+    if (!instrJson.contains("op")) {
+      // label instruction, already handled in block generation
+      return llvm::success();
+    }
+
     auto op = instrJson["op"].get<std::string>();
 
-    if (op == "const") {
+    if (op == "get") {
+      // already handled in block generation
+      return llvm::success();
+    } else if (op == "const") {
       return mlirGenConst(instrJson);
     } else if (op == "add" || op == "sub" || op == "mul" || op == "div" ||
                op == "eq" || op == "lt" || op == "gt" || op == "le" ||
                op == "ge" || op == "and" || op == "or") {
       return mlirGenBinaryOp(instrJson);
-
     } else if (op == "undef") {
       return mlirGenUndef(instrJson);
     } else if (op == "id") {
@@ -250,16 +289,19 @@ private:
     } else if (op == "not") {
       return mlirGenNot(instrJson);
     } else if (op == "br") {
-      return mlirGenBranch(instrJson);
+      return mlirGenBranch(instrJson, blockInfo);
     } else if (op == "jmp") {
-      return mlirGenJmp(instrJson);
+      return mlirGenJmp(instrJson, blockInfo);
     } else if (op == "ret") {
       return mlirGenRet(instrJson);
-    } else if (op == "set" || op == "get") {
+    } else if (op == "set") {
+      return mlirGenSet(instrJson, blockInfo);
     } else if (op == "print") {
       return mlirGenPrint(instrJson);
     } else if (op == "nop") {
       return mlirGenNop(instrJson);
+    } else if (op == "call") {
+      return mlirGenCall(instrJson);
     } else {
       llvm::errs() << "Unhandled operation: " << op << "\n";
     }
@@ -268,6 +310,9 @@ private:
   }
 
   llvm::LogicalResult mlirGenConst(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenConst " << instrJson.dump()
+                   << "\n";
     auto dest = instrJson["dest"].get<std::string>();
     if (instrJson["type"] == "int") {
       int32_t value = instrJson["value"].get<int32_t>();
@@ -290,6 +335,9 @@ private:
   }
 
   llvm::LogicalResult mlirGenUndef(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenUndef " << instrJson.dump()
+                   << "\n";
     auto dest = instrJson["dest"].get<std::string>();
     if (instrJson["type"] == "int") {
       auto undefOp = ConstantOp::create(builder, builder.getUnknownLoc(), 0);
@@ -309,6 +357,9 @@ private:
   }
 
   llvm::LogicalResult mlirGenId(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenId " << instrJson.dump()
+                   << "\n";
     auto dest = instrJson["dest"].get<std::string>();
     auto argName = instrJson["args"][0].get<std::string>();
 
@@ -317,7 +368,7 @@ private:
       return mlir::failure();
     }
 
-    auto arg = symbolTable.lookup(argName);
+    auto arg = symbolTable[argName];
 
     if (llvm::failed(declare(dest, arg))) {
       llvm::errs() << "Failed to declare variable: " << dest << "\n";
@@ -328,6 +379,9 @@ private:
   }
 
   llvm::LogicalResult mlirGenNot(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenNot " << instrJson.dump()
+                   << "\n";
     auto dest = instrJson["dest"].get<std::string>();
     auto argName = instrJson["args"][0].get<std::string>();
 
@@ -337,7 +391,7 @@ private:
       return mlir::failure();
     }
 
-    auto arg = symbolTable.lookup(argName);
+    auto arg = symbolTable[argName];
 
     auto notOp = NotOp::create(builder, builder.getUnknownLoc(), arg);
     auto result = notOp.getResult();
@@ -350,7 +404,16 @@ private:
     return llvm::success();
   }
 
-  llvm::LogicalResult mlirGenBranch(nlohmann::json &instrJson) {
+  llvm::LogicalResult mlirGenBranch(nlohmann::json &instrJson,
+                                    BlockInfo *blockInfo) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenBranch " << instrJson.dump()
+                   << " " << blockInfo << "\n";
+    if (!blockInfo) {
+      llvm::errs() << "Branch operation on a block without BlockInfo\n";
+      return mlir::failure();
+    }
+
     auto argName = instrJson["args"][0].get<std::string>();
 
     if (!symbolTable.count(argName)) {
@@ -359,7 +422,7 @@ private:
       return mlir::failure();
     }
 
-    auto arg = symbolTable.lookup(argName);
+    auto arg = symbolTable[argName];
 
     auto trueLabel = instrJson["labels"][0].get<std::string>();
     auto falseLabel = instrJson["labels"][1].get<std::string>();
@@ -370,18 +433,40 @@ private:
       return mlir::failure();
     }
 
-    auto trueBlock = labelToBlock.lookup(trueLabel);
-    auto falseBlock = labelToBlock.lookup(falseLabel);
+    auto trueBlock = labelToBlock[trueLabel];
+    auto falseBlock = labelToBlock[falseLabel];
 
-    // TODO: get target block args from their get operations
-    // auto brOp = BrOp::create(builder, builder.getUnknownLoc(), arg,
-    // trueBlock,
-    //                          falseBlock);
+    llvm::SmallVector<mlir::Value, 4> trueArgs = {};
+    llvm::SmallVector<mlir::Value, 4> falseArgs = {};
+
+    for (auto &arg : trueBlock.blockArgs) {
+      if (!blockInfo->ssaSets.count(arg)) {
+        llvm::errs() << "Undefined variable in branch true args: " << arg
+                     << "\n";
+        return mlir::failure();
+      }
+      trueArgs.push_back(blockInfo->ssaSets.lookup(arg));
+    }
+
+    for (auto &arg : falseBlock.blockArgs) {
+      if (!blockInfo->ssaSets.count(arg)) {
+        llvm::errs() << "Undefined variable in branch false args: " << arg
+                     << "\n";
+        return mlir::failure();
+      }
+      falseArgs.push_back(blockInfo->ssaSets.lookup(arg));
+    }
+
+    BrOp::create(builder, builder.getUnknownLoc(), arg, trueArgs, falseArgs,
+                 trueBlock.block, falseBlock.block);
 
     return llvm::success();
   }
 
   llvm::LogicalResult mlirGenCall(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenCall " << instrJson.dump()
+                   << "\n";
     auto funcName = instrJson["funcs"][0].get<std::string>();
 
     auto args = instrJson["args"];
@@ -394,13 +479,12 @@ private:
                      << "\n";
         return mlir::failure();
       }
-      mlirArgs.push_back(symbolTable.lookup(argName));
+      mlirArgs.push_back(symbolTable[argName]);
     }
-
-    auto type = getType(instrJson["type"].get<std::string>());
 
     if (instrJson.contains("dest")) {
       auto dest = instrJson["dest"].get<std::string>();
+      auto type = getType(instrJson["type"].get<std::string>());
       auto callOp = CallOp::create(
           builder, builder.getUnknownLoc(), type,
           mlir::FlatSymbolRefAttr::get(builder.getContext(), funcName),
@@ -421,6 +505,9 @@ private:
   }
 
   llvm::LogicalResult mlirGenPrint(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenPrint " << instrJson.dump()
+                   << "\n";
     SmallVector<mlir::Value, 4> args = {};
 
     for (auto &argNameJson : instrJson["args"]) {
@@ -432,7 +519,7 @@ private:
         return mlir::failure();
       }
 
-      args.push_back(symbolTable.lookup(argName));
+      args.push_back(symbolTable[argName]);
     }
 
     PrintOp::create(builder, builder.getUnknownLoc(), args);
@@ -441,11 +528,17 @@ private:
   }
 
   llvm::LogicalResult mlirGenNop(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenNop " << instrJson.dump()
+                   << "\n";
     NopOp::create(builder, builder.getUnknownLoc());
     return llvm::success();
   }
 
   llvm::LogicalResult mlirGenRet(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenRet " << instrJson.dump()
+                   << "\n";
     if (instrJson.contains("args")) {
       auto argName = instrJson["args"][0].get<std::string>();
 
@@ -455,18 +548,22 @@ private:
         return mlir::failure();
       }
 
-      auto arg = symbolTable.lookup(argName);
+      auto arg = symbolTable[argName];
 
-      auto retOp = RetOp::create(builder, builder.getUnknownLoc(), arg);
+      RetOp::create(builder, builder.getUnknownLoc(), arg);
     } else {
-      // TODO: handle void return
-      // auto retOp = RetOp::create(builder, builder.getUnknownLoc());
+      RetOp::create(builder, builder.getUnknownLoc(), mlir::Value{});
     }
 
     return llvm::success();
   }
 
-  llvm::LogicalResult mlirGenJmp(nlohmann::json &instrJson) {
+  llvm::LogicalResult mlirGenJmp(nlohmann::json &instrJson,
+                                 BlockInfo *blockInfo) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenJmp " << instrJson.dump() << " "
+                   << blockInfo << "\n";
+
     auto targetLabel = instrJson["labels"][0].get<std::string>();
 
     if (!labelToBlock.count(targetLabel)) {
@@ -475,15 +572,28 @@ private:
       return mlir::failure();
     }
 
-    auto targetBlock = labelToBlock.lookup(targetLabel);
+    auto targetBlock = labelToBlock[targetLabel];
 
-    // TODO: get target block args from their get operations
-    // auto jmpOp = JmpOp::create(builder, builder.getUnknownLoc(),
+    llvm::SmallVector<mlir::Value, 4> args = {};
+    if (blockInfo) {
+      for (auto &arg : targetBlock.blockArgs) {
+        if (!blockInfo->ssaSets.count(arg)) {
+          llvm::errs() << "Undefined variable in jmp args: " << arg << "\n";
+          return mlir::failure();
+        }
+        args.push_back(blockInfo->ssaSets.lookup(arg));
+      }
+    }
+
+    JmpOp::create(builder, builder.getUnknownLoc(), args, targetBlock.block);
 
     return llvm::success();
   }
 
   llvm::LogicalResult mlirGenBinaryOp(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenBinaryOp " << instrJson.dump()
+                   << "\n";
     auto dest = instrJson["dest"].get<std::string>();
     auto arg1Name = instrJson["args"][0].get<std::string>();
     auto arg2Name = instrJson["args"][1].get<std::string>();
@@ -494,8 +604,8 @@ private:
       return mlir::failure();
     }
 
-    auto arg1 = symbolTable.lookup(arg1Name);
-    auto arg2 = symbolTable.lookup(arg2Name);
+    auto arg1 = symbolTable[arg1Name];
+    auto arg2 = symbolTable[arg2Name];
 
     mlir::Value result;
 
@@ -538,6 +648,30 @@ private:
       llvm::errs() << "Failed to declare variable: " << dest << "\n";
       return mlir::failure();
     }
+
+    return llvm::success();
+  }
+
+  llvm::LogicalResult mlirGenSet(nlohmann::json &instrJson,
+                                 BlockInfo *blockInfo) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenSet " << instrJson.dump() << " "
+                   << blockInfo << "\n";
+    if (!blockInfo) {
+      llvm::errs() << "Set operation on a block without BlockInfo\n";
+      return mlir::failure();
+    }
+
+    auto dest = instrJson["args"][0].get<std::string>();
+    auto src = instrJson["args"][1].get<std::string>();
+
+    if (!symbolTable.count(src)) {
+      llvm::errs() << "Undefined variable in set operation: " << src << "\n";
+      return mlir::failure();
+    }
+
+    auto arg = symbolTable[src];
+    blockInfo->ssaSets[dest] = arg;
 
     return llvm::success();
   }

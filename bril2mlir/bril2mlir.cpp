@@ -26,6 +26,11 @@ int main() {
 
   auto module = bril::mlirGen(context, brilJson);
 
+  if (!module) {
+    llvm::errs() << "Failed to generate MLIR module\n";
+    return 1;
+  }
+
   module->dump();
 
   return 0;
