@@ -108,7 +108,7 @@ private:
 
   mlir::Type getType(StringRef type) {
     if (type == "int")
-      return builder.getIntegerType(32, true);
+      return builder.getIntegerType(32);
     if (type == "bool")
       return builder.getIntegerType(1);
     return nullptr;

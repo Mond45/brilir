@@ -16,7 +16,7 @@ include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
 include "bril/BrilDialect.td"
 
-def ValidBrilType : AnyTypeOf<[SI32, I1]>;
+def ValidBrilType : AnyTypeOf<[I32, I1]>;
 
 def ConstantOp : Bril_Op<"const", [Pure]> {
     let summary = "Defines a constant value.";
@@ -24,7 +24,7 @@ def ConstantOp : Bril_Op<"const", [Pure]> {
         The `bril.const` operation defines a constant integer or boolean value.
     }];
 
-    let arguments = (ins AnyAttrOf<[SI32Attr, I1Attr]>:$value);
+    let arguments = (ins AnyAttrOf<[I32Attr, I1Attr]>:$value);
     let results = (outs ValidBrilType);
 
     let builders = [OpBuilder<(ins "int":$value)>, OpBuilder<(ins "bool":$value)>];
@@ -56,8 +56,8 @@ def AddOp : Bril_Op<"add", [Pure, SameOperandsAndResultType]> {
         The `bril.add` operation takes two integer operands and returns their sum.
     }];
 
-    let arguments = (ins SI32:$lhs, SI32:$rhs);
-    let results = (outs SI32);
+    let arguments = (ins I32:$lhs, I32:$rhs);
+    let results = (outs I32);
 }
 
 def SubOp : Bril_Op<"sub", [Pure, SameOperandsAndResultType]> {
@@ -66,8 +66,8 @@ def SubOp : Bril_Op<"sub", [Pure, SameOperandsAndResultType]> {
         The `bril.sub` operation takes two integer operands and returns the result of subtracting the second from the first.
     }];
 
-    let arguments = (ins SI32:$lhs, SI32:$rhs);
-    let results = (outs SI32);
+    let arguments = (ins I32:$lhs, I32:$rhs);
+    let results = (outs I32);
 }
 
 def MulOp : Bril_Op<"mul", [Pure, SameOperandsAndResultType]> {
@@ -76,8 +76,8 @@ def MulOp : Bril_Op<"mul", [Pure, SameOperandsAndResultType]> {
         The `bril.mul` operation takes two integer operands and returns their product.
     }];
 
-    let arguments = (ins SI32:$lhs, SI32:$rhs);
-    let results = (outs SI32);
+    let arguments = (ins I32:$lhs, I32:$rhs);
+    let results = (outs I32);
 }
 
 def DivOp : Bril_Op<"div", [SameOperandsAndResultType]> {
@@ -86,8 +86,8 @@ def DivOp : Bril_Op<"div", [SameOperandsAndResultType]> {
         The `bril.div` operation takes two integer operands and returns the result of dividing the first by the second.
     }];
 
-    let arguments = (ins SI32:$lhs, SI32:$rhs);
-    let results = (outs SI32);
+    let arguments = (ins I32:$lhs, I32:$rhs);
+    let results = (outs I32);
 }
 
 def EqOp : Bril_Op<"eq", [Pure]> {
@@ -96,7 +96,7 @@ def EqOp : Bril_Op<"eq", [Pure]> {
         The `bril.eq` operation takes two integer operands and returns true if they are equal, otherwise returns false.
     }];
 
-    let arguments = (ins SI32:$lhs, SI32:$rhs);
+    let arguments = (ins I32:$lhs, I32:$rhs);
     let results = (outs I1);
 }
 
@@ -106,7 +106,7 @@ def LtOp : Bril_Op<"lt", [Pure]> {
         The `bril.lt` operation takes two integer operands and returns true if the first is less than the second, otherwise returns false.
     }];
 
-    let arguments = (ins SI32:$lhs, SI32:$rhs);
+    let arguments = (ins I32:$lhs, I32:$rhs);
     let results = (outs I1);
 }
 
@@ -116,7 +116,7 @@ def GtOp : Bril_Op<"gt", [Pure]> {
         The `bril.gt` operation takes two integer operands and returns true if the first is greater than the second, otherwise returns false.
     }];
 
-    let arguments = (ins SI32:$lhs, SI32:$rhs);
+    let arguments = (ins I32:$lhs, I32:$rhs);
     let results = (outs I1);
 }
 
@@ -126,7 +126,7 @@ def LeOp : Bril_Op<"le", [Pure]> {
         The `bril.le` operation takes two integer operands and returns true if the first is less than or equal to the second, otherwise returns false.
     }];
 
-    let arguments = (ins SI32:$lhs, SI32:$rhs);
+    let arguments = (ins I32:$lhs, I32:$rhs);
     let results = (outs I1);
 }
 
@@ -136,7 +136,7 @@ def GeOp : Bril_Op<"ge", [Pure]> {
         The `bril.ge` operation takes two integer operands and returns true if the first is greater than or equal to the second, otherwise returns false.
     }];
 
-    let arguments = (ins SI32:$lhs, SI32:$rhs);
+    let arguments = (ins I32:$lhs, I32:$rhs);
     let results = (outs I1);
 }
 

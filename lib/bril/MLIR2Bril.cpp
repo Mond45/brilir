@@ -103,7 +103,7 @@ private:
       if (auto intAttr = dyn_cast<mlir::IntegerAttr>(constOp.getValue())) {
         if (intAttr.getType().isInteger(32)) {
           instrJson["type"] = "int";
-          instrJson["value"] = intAttr.getSInt();
+          instrJson["value"] = intAttr.getInt();
         } else if (intAttr.getType().isInteger(1)) {
           instrJson["type"] = "bool";
           instrJson["value"] = static_cast<bool>(intAttr.getInt());
