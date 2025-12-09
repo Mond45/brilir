@@ -16,15 +16,10 @@
 #define BRIL_MLIRGEN_H
 
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/OwningOpRef.h"
 #include <nlohmann/json.hpp>
 
 namespace bril {
-/// Emit IR for the given Bril moduleAST, returns a newly created MLIR module
-/// or nullptr on failure.
-mlir::OwningOpRef<mlir::ModuleOp> mlirGen(mlir::MLIRContext &context,
-                                          nlohmann::json &json);
+nlohmann::json mlirToBril(mlir::ModuleOp module);
 } // namespace bril
 
 #endif // BRIL_MLIRGEN_H

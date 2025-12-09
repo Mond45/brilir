@@ -32,13 +32,13 @@ void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
 }
 
 void ConstantOp::build(OpBuilder &builder, OperationState &state,
-                         int32_t value) {
-  state.addAttribute("value", builder.getI32IntegerAttr(value));
-  state.addTypes(builder.getIntegerType(32));
+                       int32_t value) {
+  state.addAttribute(
+      "value", mlir::IntegerAttr::get(builder.getIntegerType(32, true), value));
+  state.addTypes(builder.getIntegerType(32, true));
 }
 
-void ConstantOp::build(OpBuilder &builder, OperationState &state,
-                         bool value) {
+void ConstantOp::build(OpBuilder &builder, OperationState &state, bool value) {
   state.addAttribute("value", builder.getBoolAttr(value));
   state.addTypes(builder.getIntegerType(1));
 }
