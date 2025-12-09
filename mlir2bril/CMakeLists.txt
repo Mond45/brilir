@@ -1,5 +1,9 @@
+find_package(nlohmann_json 3.12.0 REQUIRED)
+
 set(LIBS
     MLIRBril
+    MLIRParser
+    nlohmann_json::nlohmann_json
   )
 add_llvm_executable(mlir2bril mlir2bril.cpp)
 
