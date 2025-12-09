@@ -13,8 +13,10 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/Casting.h"
 
 #include "bril/BrilPasses.h"
@@ -23,6 +25,9 @@ using llvm::cast, llvm::dyn_cast;
 
 namespace mlir::bril {
 #define GEN_PASS_DEF_CONVERTBRILTOSTD
+#include "bril/BrilPasses.h.inc"
+
+#define GEN_PASS_DEF_RENAMEMAINFUNCTION
 #include "bril/BrilPasses.h.inc"
 
 namespace {
@@ -329,6 +334,19 @@ private:
         global.getType(), globalPtr, ArrayRef<Value>({cst0, cst0}));
   }
 };
+
+class MainFunctionRewriter : public OpRewritePattern<func::FuncOp> {
+public:
+  using OpRewritePattern<func::FuncOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(func::FuncOp op,
+                                PatternRewriter &rewriter) const final {
+    if (op.getSymName() == "main") {
+      rewriter.modifyOpInPlace(op, [&op]() { op.setSymName("bril_main"); });
+      return success();
+    }
+    return failure();
+  }
+};
 } // namespace
 
 class ConvertBrilToStd : public impl::ConvertBrilToStdBase<ConvertBrilToStd> {
@@ -372,6 +390,28 @@ public:
 
     if (failed(applyFullConversion(getOperation(), target, patternSet)))
       signalPassFailure();
+  }
+};
+
+class RenameMainFunction
+    : public impl::RenameMainFunctionBase<RenameMainFunction> {
+
+public:
+  using impl::RenameMainFunctionBase<
+      RenameMainFunction>::RenameMainFunctionBase;
+
+  void runOnOperation() final {
+    ModuleOp op = getOperation();
+
+    SymbolTable symbolTable(op);
+    for (auto func : op.getOps<func::FuncOp>()) {
+      if (func.getSymName() == "main") {
+        if (failed(symbolTable.rename(func, "bril_main"))) {
+          signalPassFailure();
+          return;
+        }
+      }
+    }
   }
 };
 } // namespace mlir::bril

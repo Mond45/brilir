@@ -20,4 +20,11 @@ def ConvertBrilToStd: Pass<"convert-bril-to-std", "::mlir::ModuleOp"> {
   let dependentDialects = ["LLVM::LLVMDialect", "arith::ArithDialect", "func::FuncDialect", "cf::ControlFlowDialect"];
 }
 
+def RenameMainFunction: Pass<"rename-main-function", "::mlir::ModuleOp"> {
+  let summary = "Rename 'main' function to avoid name clashes.";
+  let description = [{
+    This pass renames the 'main' function to prevent name clashes during linking.
+  }];
+}
+
 #endif // BRIL_PASS
