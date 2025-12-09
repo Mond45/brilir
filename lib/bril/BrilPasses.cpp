@@ -5,12 +5,374 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+#include "bril/BrilOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/DialectConversion.h"
+#include "llvm/Support/Casting.h"
 
 #include "bril/BrilPasses.h"
 
-namespace mlir::bril {} // namespace mlir::bril
-                        // namespace mlir::bril
+using llvm::cast, llvm::dyn_cast;
+
+namespace mlir::bril {
+#define GEN_PASS_DEF_CONVERTBRILTOSTD
+#include "bril/BrilPasses.h.inc"
+
+namespace {
+struct ConstantOpConversion : public OpConversionPattern<bril::ConstantOp> {
+  using OpConversionPattern<bril::ConstantOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::ConstantOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    if (auto intAttr = dyn_cast<IntegerAttr>(op.getValue())) {
+      rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, intAttr);
+    } else {
+      return failure();
+    }
+
+    return success();
+  }
+};
+
+struct IdOpConversion : public OpConversionPattern<bril::IdOp> {
+  using OpConversionPattern<bril::IdOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::IdOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto const0 = arith::ConstantIntOp::create(
+        rewriter, op.getLoc(), 0,
+        op.getResult().getType().isInteger(32) ? 32 : 1);
+    auto add0 =
+        arith::AddIOp::create(rewriter, op.getLoc(), op.getInput(), const0);
+    rewriter.replaceOp(op, add0.getResult());
+
+    return success();
+  }
+};
+
+struct UndefOpConversion : public OpConversionPattern<bril::UndefOp> {
+  using OpConversionPattern<bril::UndefOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::UndefOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto zeroAttr = rewriter.getIntegerAttr(op->getResult(0).getType(), 0);
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, zeroAttr);
+    return success();
+  }
+};
+
+template <typename Op, typename LoweredOp>
+struct BinaryOpConversion : public OpConversionPattern<Op> {
+  using OpConversionPattern<Op>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<Op>::OpAdaptor;
+
+  LogicalResult
+  matchAndRewrite(Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto lhs = op.getOperands()[0];
+    auto rhs = op.getOperands()[1];
+
+    rewriter.replaceOpWithNewOp<LoweredOp>(op, lhs, rhs);
+
+    return success();
+  }
+};
+
+template <typename Op, arith::CmpIPredicate Predicate>
+struct CmpOpConversion : public OpConversionPattern<Op> {
+  using OpConversionPattern<Op>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<Op>::OpAdaptor;
+
+  LogicalResult
+  matchAndRewrite(Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto lhs = op.getOperands()[0];
+    auto rhs = op.getOperands()[1];
+
+    auto loc = op.getLoc();
+
+    auto cmpOp = arith::CmpIOp::create(rewriter, loc, Predicate, lhs, rhs);
+
+    rewriter.replaceOp(op, cmpOp.getResult());
+
+    return success();
+  }
+};
+
+using AddOpConversion = BinaryOpConversion<bril::AddOp, arith::AddIOp>;
+using SubOpConversion = BinaryOpConversion<bril::SubOp, arith::SubIOp>;
+using MulOpConversion = BinaryOpConversion<bril::MulOp, arith::MulIOp>;
+using DivOpConversion = BinaryOpConversion<bril::DivOp, arith::DivSIOp>;
+using EqOpConversion = CmpOpConversion<bril::EqOp, arith::CmpIPredicate::eq>;
+using LtOpConversion = CmpOpConversion<bril::LtOp, arith::CmpIPredicate::slt>;
+using GtOpConversion = CmpOpConversion<bril::GtOp, arith::CmpIPredicate::sgt>;
+using LeOpConversion = CmpOpConversion<bril::LeOp, arith::CmpIPredicate::sle>;
+using GeOpConversion = CmpOpConversion<bril::GeOp, arith::CmpIPredicate::sge>;
+using AndOpConversion = BinaryOpConversion<bril::AndOp, arith::AndIOp>;
+using OrOpConversion = BinaryOpConversion<bril::OrOp, arith::OrIOp>;
+// not
+
+struct NotOpConversion : public OpConversionPattern<bril::NotOp> {
+  using OpConversionPattern<bril::NotOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::NotOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto input = op.getOperand();
+    auto loc = op.getLoc();
+
+    auto const1 = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    auto xorOp = arith::XOrIOp::create(rewriter, loc, input, const1);
+
+    rewriter.replaceOp(op, xorOp.getResult());
+
+    return success();
+  }
+};
+
+struct CallOpConversion : public OpConversionPattern<bril::CallOp> {
+  using OpConversionPattern<bril::CallOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::CallOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op, op.getCallee(), op.getResultTypes(), op.getOperands());
+    return success();
+  }
+};
+
+struct JmpOpConversion : public OpConversionPattern<bril::JmpOp> {
+  using OpConversionPattern<bril::JmpOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::JmpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    rewriter.replaceOpWithNewOp<cf::BranchOp>(op, op.getTarget(),
+                                              op->getOperands());
+    return success();
+  }
+};
+
+struct BrOpConversion : public OpConversionPattern<bril::BrOp> {
+  using OpConversionPattern<bril::BrOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::BrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
+        op, op.getCondition(), op.getTrueTarget(), op.getTrueArgs(),
+        op.getFalseTarget(), op.getFalseArgs());
+    return success();
+  }
+};
+
+struct FuncOpConversion : public OpConversionPattern<bril::FuncOp> {
+  using OpConversionPattern<bril::FuncOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::FuncOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto funcType =
+        rewriter.getFunctionType(op.getArgumentTypes(), op.getResultTypes());
+    auto newFuncOp =
+        func::FuncOp::create(rewriter, op.getLoc(), op.getName(), funcType);
+
+    // Inline the body of the old function into the new function.
+    rewriter.inlineRegionBefore(op.getBody(), newFuncOp.getBody(),
+                                newFuncOp.end());
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct RetOpConversion : public OpConversionPattern<bril::RetOp> {
+  using OpConversionPattern<bril::RetOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::RetOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    rewriter.replaceOpWithNewOp<func::ReturnOp>(op, op.getOperands());
+    return success();
+  }
+};
+
+struct NopOpConversion : public OpConversionPattern<bril::NopOp> {
+  using OpConversionPattern<bril::NopOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::NopOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct PrintOpConversion : public OpConversionPattern<bril::PrintOp> {
+  using OpConversionPattern<bril::PrintOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::PrintOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    // For now, just erase the print operation.
+    ModuleOp parentModule = op->getParentOfType<ModuleOp>();
+    auto printfRef = getOrInsertPrintf(rewriter, parentModule);
+
+    Location loc = op.getLoc();
+
+    Value formatSpecifierCst = getOrCreateGlobalString(
+        loc, rewriter, "frmt_spec", StringRef("%d\0", 3), parentModule);
+    Value spaceCst = getOrCreateGlobalString(loc, rewriter, "space",
+                                             StringRef(" \0", 2), parentModule);
+    Value newlineCst = getOrCreateGlobalString(
+        loc, rewriter, "newline", StringRef("\n\0", 2), parentModule);
+
+    const auto numValues = op.getValues().size();
+    for (auto [i, val] : llvm::enumerate(op.getValues())) {
+      // Call printf with the format specifier and the value to print.
+      if (val.getType().isInteger(32)) {
+        LLVM::CallOp::create(rewriter, loc,
+                             getPrintfType(rewriter.getContext()), printfRef,
+                             ArrayRef<Value>({formatSpecifierCst, val}));
+      } else if (val.getType().isInteger(1)) {
+        Value trueStr = getOrCreateGlobalString(
+            loc, rewriter, "true_str", StringRef("true\0", 5), parentModule);
+        Value falseStr = getOrCreateGlobalString(
+            loc, rewriter, "false_str", StringRef("false\0", 6), parentModule);
+
+        Value boolAsStr =
+            arith::SelectOp::create(rewriter, loc, val, trueStr, falseStr);
+        LLVM::CallOp::create(rewriter, loc,
+                             getPrintfType(rewriter.getContext()), printfRef,
+                             ArrayRef<Value>({boolAsStr}));
+      } else {
+        // Unsupported type for printing.
+        return failure();
+      }
+
+      // If this is not the last value, print a space after it.
+      if (i != numValues - 1) {
+        LLVM::CallOp::create(rewriter, loc,
+                             getPrintfType(rewriter.getContext()), printfRef,
+                             ArrayRef<Value>({spaceCst}));
+      }
+    }
+
+    // Print a newline at the end.
+    LLVM::CallOp::create(rewriter, loc, getPrintfType(rewriter.getContext()),
+                         printfRef, ArrayRef<Value>({newlineCst}));
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  static LLVM::LLVMFunctionType getPrintfType(MLIRContext *context) {
+    auto llvmI32Ty = IntegerType::get(context, 32);
+    auto llvmPtrTy = LLVM::LLVMPointerType::get(context);
+    auto llvmFnType = LLVM::LLVMFunctionType::get(llvmI32Ty, llvmPtrTy,
+                                                  /*isVarArg=*/true);
+    return llvmFnType;
+  }
+
+  /// Return a symbol reference to the printf function, inserting it into the
+  /// module if necessary.
+  static FlatSymbolRefAttr getOrInsertPrintf(PatternRewriter &rewriter,
+                                             ModuleOp module) {
+    auto *context = module.getContext();
+    if (module.lookupSymbol<LLVM::LLVMFuncOp>("printf"))
+      return SymbolRefAttr::get(context, "printf");
+
+    // Insert the printf function into the body of the parent module.
+    PatternRewriter::InsertionGuard insertGuard(rewriter);
+    rewriter.setInsertionPointToStart(module.getBody());
+    LLVM::LLVMFuncOp::create(rewriter, module.getLoc(), "printf",
+                             getPrintfType(context));
+    return SymbolRefAttr::get(context, "printf");
+  }
+
+  /// Return a value representing an access into a global string with the given
+  /// name, creating the string if necessary.
+  static Value getOrCreateGlobalString(Location loc, OpBuilder &builder,
+                                       StringRef name, StringRef value,
+                                       ModuleOp module) {
+    // Create the global at the entry of the module.
+    LLVM::GlobalOp global;
+    if (!(global = module.lookupSymbol<LLVM::GlobalOp>(name))) {
+      OpBuilder::InsertionGuard insertGuard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto type = LLVM::LLVMArrayType::get(
+          IntegerType::get(builder.getContext(), 8), value.size());
+      global = LLVM::GlobalOp::create(builder, loc, type, /*isConstant=*/true,
+                                      LLVM::Linkage::Internal, name,
+                                      builder.getStringAttr(value),
+                                      /*alignment=*/0);
+    }
+
+    // Get the pointer to the first character in the global string.
+    Value globalPtr = LLVM::AddressOfOp::create(builder, loc, global);
+    Value cst0 = LLVM::ConstantOp::create(builder, loc, builder.getI64Type(),
+                                          builder.getIndexAttr(0));
+    return LLVM::GEPOp::create(
+        builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
+        global.getType(), globalPtr, ArrayRef<Value>({cst0, cst0}));
+  }
+};
+} // namespace
+
+class ConvertBrilToStd : public impl::ConvertBrilToStdBase<ConvertBrilToStd> {
+public:
+  using impl::ConvertBrilToStdBase<ConvertBrilToStd>::ConvertBrilToStdBase;
+  void runOnOperation() final {
+    ConversionTarget target(getContext());
+
+    target.addLegalOp<mlir::ModuleOp>();
+    target.addLegalDialect<mlir::arith::ArithDialect, mlir::func::FuncDialect,
+                           mlir::cf::ControlFlowDialect,
+                           mlir::LLVM::LLVMDialect>();
+
+    target.addIllegalDialect<mlir::bril::BrilDialect>();
+
+    RewritePatternSet patterns(&getContext());
+    patterns.add<ConstantOpConversion>(&getContext());
+    patterns.add<IdOpConversion>(&getContext());
+    patterns.add<UndefOpConversion>(&getContext());
+    patterns.add<AddOpConversion>(&getContext());
+    patterns.add<SubOpConversion>(&getContext());
+    patterns.add<MulOpConversion>(&getContext());
+    patterns.add<DivOpConversion>(&getContext());
+    patterns.add<EqOpConversion>(&getContext());
+    patterns.add<LtOpConversion>(&getContext());
+    patterns.add<GtOpConversion>(&getContext());
+    patterns.add<LeOpConversion>(&getContext());
+    patterns.add<GeOpConversion>(&getContext());
+    patterns.add<AndOpConversion>(&getContext());
+    patterns.add<OrOpConversion>(&getContext());
+    patterns.add<NotOpConversion>(&getContext());
+    patterns.add<CallOpConversion>(&getContext());
+    patterns.add<JmpOpConversion>(&getContext());
+    patterns.add<BrOpConversion>(&getContext());
+    patterns.add<FuncOpConversion>(&getContext());
+    patterns.add<RetOpConversion>(&getContext());
+    patterns.add<NopOpConversion>(&getContext());
+    patterns.add<PrintOpConversion>(&getContext());
+
+    FrozenRewritePatternSet patternSet(std::move(patterns));
+
+    if (failed(applyFullConversion(getOperation(), target, patternSet)))
+      signalPassFailure();
+  }
+};
+} // namespace mlir::bril
+  // namespace mlir::bril

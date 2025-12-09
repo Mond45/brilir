@@ -11,4 +11,13 @@
 
 include "mlir/Pass/PassBase.td"
 
+def ConvertBrilToStd: Pass<"convert-bril-to-std", "::mlir::ModuleOp"> {
+  let summary = "Convert Bril dialect to Standard dialect.";
+  let description = [{
+    This pass converts operations in the Bril dialect to equivalent
+    operations in the Standard dialect.
+  }];
+  let dependentDialects = ["LLVM::LLVMDialect", "arith::ArithDialect", "func::FuncDialect", "cf::ControlFlowDialect"];
+}
+
 #endif // BRIL_PASS
