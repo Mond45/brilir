@@ -30,6 +30,16 @@ def ConstantOp : Bril_Op<"const", [Pure]> {
     let builders = [OpBuilder<(ins "int":$value)>, OpBuilder<(ins "bool":$value)>];
 }
 
+def UndefOp : Bril_Op<"undef"> {
+    let summary = "Defines an undefined value.";
+    let description = [{
+        The `bril.undef` operation produces an undefined value.
+    }];
+
+    let arguments = (ins);
+    let results = (outs ValidBrilType);
+}
+
 def AddOp : Bril_Op<"add", [Pure, SameOperandsAndResultType]> {
     let summary = "Adds two integers.";
     let description = [{

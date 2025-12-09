@@ -339,18 +339,10 @@ private:
       llvm::errs() << "entering function mlirGenUndef " << instrJson.dump()
                    << "\n";
     auto dest = instrJson["dest"].get<std::string>();
-    if (instrJson["type"] == "int") {
-      auto undefOp = ConstantOp::create(builder, builder.getUnknownLoc(), 0);
-      if (llvm::failed(declare(dest, undefOp.getResult()))) {
-        return mlir::failure();
-      }
-    } else if (instrJson["type"] == "bool") {
-      auto undefOp =
-          ConstantOp::create(builder, builder.getUnknownLoc(), false);
-      if (llvm::failed(declare(dest, undefOp.getResult()))) {
-        return mlir::failure();
-      }
-    } else {
+    auto undefOp =
+        UndefOp::create(builder, builder.getUnknownLoc(),
+                        getType(instrJson["type"].get<std::string>()));
+    if (llvm::failed(declare(dest, undefOp.getResult()))) {
       return mlir::failure();
     }
     return llvm::success();
