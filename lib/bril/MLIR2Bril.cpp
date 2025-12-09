@@ -156,6 +156,14 @@ private:
       instrJson["type"] = getTypeString(op.getResult(0).getType());
 
       return instrJson;
+    } else if (auto idOp = dyn_cast<IdOp>(op)) {
+      json instrJson;
+      instrJson["op"] = "id";
+      instrJson["dest"] = getId(idOp.getResult());
+      instrJson["args"] = nlohmann::json::array();
+      instrJson["args"].push_back(getId(idOp.getInput()));
+      instrJson["type"] = getTypeString(idOp.getResult().getType());
+      return instrJson;
     } else if (auto notOp = dyn_cast<NotOp>(op)) {
       json instrJson;
       instrJson["op"] = "not";
