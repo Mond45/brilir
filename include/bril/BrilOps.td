@@ -30,6 +30,16 @@ def ConstantOp : Bril_Op<"const", [Pure]> {
     let builders = [OpBuilder<(ins "int":$value)>, OpBuilder<(ins "bool":$value)>];
 }
 
+def IdOp : Bril_Op<"id", [Pure, SameOperandsAndResultType]> {
+    let summary = "Identity operation.";
+    let description = [{
+        The `bril.id` operation returns its input operand unchanged.
+    }];
+
+    let arguments = (ins ValidBrilType:$input);
+    let results = (outs ValidBrilType);
+}
+
 def UndefOp : Bril_Op<"undef"> {
     let summary = "Defines an undefined value.";
     let description = [{

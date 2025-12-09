@@ -114,6 +114,11 @@ private:
     return nullptr;
   }
 
+  std::string generateBlockName() {
+    static int blockCounter = 0;
+    return "___generated_block_" + std::to_string(blockCounter++);
+  }
+
   std::vector<std::vector<nlohmann::json>>
   splitBlocks(nlohmann::json &instrsJson) {
     std::vector<std::vector<nlohmann::json>> blocks = {};
@@ -211,7 +216,31 @@ private:
 
         blockList.push_back(mlirBlock);
       } else {
+        auto blockName = generateBlockName();
         auto *mlirBlock = firstBlock ? &entryBlock : func.addBlock();
+        llvm::SmallVector<std::string, 4> blockArgNames;
+
+        for (auto &instr : block) {
+          // collect all block arguments from 'get' instructions
+          if (instr.contains("op") && instr["op"] == "get") {
+            auto blockArg = mlirBlock->addArgument(
+                getType(instr["type"].get<std::string>()),
+                builder.getUnknownLoc());
+            blockArgNames.push_back(instr["dest"].get<std::string>());
+            if (llvm::failed(
+                    declare(instr["dest"].get<std::string>(), blockArg))) {
+              func.emitError("failed to declare block argument ");
+              return llvm::failure();
+            }
+          }
+        }
+
+        labelToBlock[blockName] = BlockInfo{mlirBlock, {}, {}};
+        blockToLabel[mlirBlock] = blockName;
+
+        block.insert(block.begin(),
+                     nlohmann::json{{"label", blockName}}); // add a label
+
         blockList.push_back(mlirBlock);
       }
       firstBlock = false;
@@ -352,6 +381,7 @@ private:
     if (DEBUG)
       llvm::errs() << "entering function mlirGenId " << instrJson.dump()
                    << "\n";
+
     auto dest = instrJson["dest"].get<std::string>();
     auto argName = instrJson["args"][0].get<std::string>();
 
@@ -361,8 +391,9 @@ private:
     }
 
     auto arg = symbolTable[argName];
+    auto idOp = IdOp::create(builder, builder.getUnknownLoc(), arg);
 
-    if (llvm::failed(declare(dest, arg))) {
+    if (llvm::failed(declare(dest, idOp.getResult()))) {
       llvm::errs() << "Failed to declare variable: " << dest << "\n";
       return mlir::failure();
     }
@@ -531,7 +562,7 @@ private:
     if (DEBUG)
       llvm::errs() << "entering function mlirGenRet " << instrJson.dump()
                    << "\n";
-    if (instrJson.contains("args")) {
+    if (instrJson.contains("args") && !instrJson["args"].empty()) {
       auto argName = instrJson["args"][0].get<std::string>();
 
       if (!symbolTable.count(argName)) {
@@ -657,12 +688,20 @@ private:
     auto dest = instrJson["args"][0].get<std::string>();
     auto src = instrJson["args"][1].get<std::string>();
 
+    mlir::Value arg;
+
     if (!symbolTable.count(src)) {
-      llvm::errs() << "Undefined variable in set operation: " << src << "\n";
-      return mlir::failure();
+      auto destType = symbolTable[dest].getType();
+      nlohmann::json undefJson = {
+          {"dest", "___undef__" + src},
+          {"type", destType.isInteger(1) ? "bool" : "int"},
+          {"op", "undef"}};
+      mlirGenUndef(undefJson);
+      arg = symbolTable["___undef__" + src];
+    } else {
+      arg = symbolTable[src];
     }
 
-    auto arg = symbolTable[src];
     blockInfo->ssaSets[dest] = arg;
 
     return llvm::success();
