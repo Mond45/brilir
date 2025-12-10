@@ -6,7 +6,7 @@ OUTPUT_FILE="results.csv"
 
 : > "$OUTPUT_FILE"   # truncate output file
 
-for file in "$INPUT_DIR"/*; do
+for file in "$INPUT_DIR"/*.json; do
     [ -f "$file" ] || continue
 
     echo "Testing file: $file"

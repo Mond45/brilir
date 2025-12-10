@@ -1,0 +1,64 @@
+ackermann.bril:# ARGS: 3 6
+arithmetic-series.bril:# ARGS: 7
+armstrong.bril:# ARGS: 407
+bbs.bril:# ARGS: 11 23 3 6
+bin-search.bril:# ARGS: 0 10000 738
+binary-fmt.bril:# ARGS: 128
+binpow.bril:# ARGS: 2 11
+bitshift.bril:# ARGS: 3 5 10000 4
+bitwise-ops.bril:# ARGS: 7 15 0
+braille.bril:# ARGS: 408
+catalan.bril:# ARGS: 10
+check-primes.bril:# ARGS: 50
+collatz.bril:# ARGS: 7
+combination.bril:# ARGS: 12 3
+dayofweek.bril:# ARGS: 1970 1 1
+delannoy.bril:# ARGS: 8
+digital-root.bril:# ARGS: 645634654
+fact.bril:# ARGS: 20
+factors.bril:# ARGS: 60
+fib_recursive.bril:# ARGS: 10
+fitsinside.bril:# ARGS: 12 4 5 13
+fizz-buzz.bril:# ARGS: 101
+gcd.bril:# ARGS: 4 20
+gebmm.bril:# ARGS: 2791 57 4 3 2
+geometric-sum.bril:# ARGS: 2 3 5
+gpf.bril:# ARGS: 13195
+grad_desc.bril:# ARGS: 6000 2000 100 20
+graycode.bril:# ARGS: 16
+hamming.bril:# ARGS: 12 6
+hanoi.bril:# ARGS: 3
+is-decreasing.bril:# ARGS: 954320
+karatsuba.bril:# ARGS: 43210 98765
+lcm.bril:#ARGS: 64 24
+legendre.bril:# ARGS: 6 2
+loopfact.bril:# ARGS: 8
+mccarthy91.bril:# ARGS: 15
+mod_inv.bril:# ARGS: 46 10007
+mod_pow.bril:# ARGS: 4 13 497
+montgomery.bril:# ARGS: 100 17 47 12 
+mountain.bril:# ARGS: 12349420 
+orders.bril:# ARGS: 96 false
+palindrome.bril:# ARGS: 12321
+perfect.bril:# ARGS: 496
+permutation.bril:# ARGS: 6 3
+primes-between.bril:# ARGS: 1 1000
+pythagorean_triple.bril:# ARGS: 125
+quadratic.bril:# ARGS: -5 8 21
+recfact.bril:# ARGS: 8
+rectangles-area-difference.bril:# ARGS: 5 10 6 13
+reverse.bril:# ARGS: 123
+rot13.bril:# ARGS: 10
+sqrt_bin_search.bril:#ARGS: 37454400 0 37454400
+squares.bril:# ARGS: 30
+sum-bits.bril:# ARGS: 42
+sum-check.bril:# ARGS: 1000
+sum-digits.bril:# ARGS: 1234567890
+sum-divisible-by-m.bril:# ARGS: 3 300
+sum-divisors.bril:# ARGS: 100
+sum-of-cubes.bril:# ARGS: 6
+sum-sq-diff.bril:# ARGS: 100
+tail-call.bril:#ARGS: 1500
+totient.bril:# ARGS: 2023
+triangle.bril:# ARGS: 36
+up-arrow.bril:# ARGS: 2 3 3
