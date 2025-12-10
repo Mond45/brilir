@@ -68,7 +68,7 @@ private:
   llvm::DenseMap<mlir::Block *, std::string> blockLabels;
 
   std::string getTypeString(mlir::Type type) {
-    if (type.isInteger(32))
+    if (type.isInteger(64))
       return "int";
     if (type.isInteger(1))
       return "bool";
@@ -101,7 +101,7 @@ private:
       instrJson["op"] = "const";
       instrJson["dest"] = getId(constOp.getResult());
       if (auto intAttr = dyn_cast<mlir::IntegerAttr>(constOp.getValue())) {
-        if (intAttr.getType().isInteger(32)) {
+        if (intAttr.getType().isInteger(64)) {
           instrJson["type"] = "int";
           instrJson["value"] = intAttr.getInt();
         } else if (intAttr.getType().isInteger(1)) {

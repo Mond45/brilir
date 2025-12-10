@@ -55,7 +55,7 @@ struct IdOpConversion : public OpConversionPattern<bril::IdOp> {
                   ConversionPatternRewriter &rewriter) const final {
     auto const0 = arith::ConstantIntOp::create(
         rewriter, op.getLoc(), 0,
-        op.getResult().getType().isInteger(32) ? 32 : 1);
+        op.getResult().getType().isInteger(64) ? 64 : 1);
     auto add0 =
         arith::AddIOp::create(rewriter, op.getLoc(), op.getInput(), const0);
     rewriter.replaceOp(op, add0.getResult());
@@ -237,7 +237,7 @@ struct PrintOpConversion : public OpConversionPattern<bril::PrintOp> {
     Location loc = op.getLoc();
 
     Value formatSpecifierCst = getOrCreateGlobalString(
-        loc, rewriter, "frmt_spec", StringRef("%d\0", 3), parentModule);
+        loc, rewriter, "frmt_spec", StringRef("%ld\0", 4), parentModule);
     Value spaceCst = getOrCreateGlobalString(loc, rewriter, "space",
                                              StringRef(" \0", 2), parentModule);
     Value newlineCst = getOrCreateGlobalString(
@@ -246,7 +246,7 @@ struct PrintOpConversion : public OpConversionPattern<bril::PrintOp> {
     const auto numValues = op.getValues().size();
     for (auto [i, val] : llvm::enumerate(op.getValues())) {
       // Call printf with the format specifier and the value to print.
-      if (val.getType().isInteger(32)) {
+      if (val.getType().isInteger(64)) {
         LLVM::CallOp::create(rewriter, loc,
                              getPrintfType(rewriter.getContext()), printfRef,
                              ArrayRef<Value>({formatSpecifierCst, val}));
@@ -284,9 +284,9 @@ struct PrintOpConversion : public OpConversionPattern<bril::PrintOp> {
 
 private:
   static LLVM::LLVMFunctionType getPrintfType(MLIRContext *context) {
-    auto llvmI32Ty = IntegerType::get(context, 32);
+    auto llvmI64Ty = IntegerType::get(context, 64);
     auto llvmPtrTy = LLVM::LLVMPointerType::get(context);
-    auto llvmFnType = LLVM::LLVMFunctionType::get(llvmI32Ty, llvmPtrTy,
+    auto llvmFnType = LLVM::LLVMFunctionType::get(llvmI64Ty, llvmPtrTy,
                                                   /*isVarArg=*/true);
     return llvmFnType;
   }

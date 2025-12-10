@@ -108,7 +108,7 @@ private:
 
   mlir::Type getType(StringRef type) {
     if (type == "int")
-      return builder.getIntegerType(32);
+      return builder.getIntegerType(64);
     if (type == "bool")
       return builder.getIntegerType(1);
     return nullptr;
@@ -348,7 +348,7 @@ private:
                    << "\n";
     auto dest = instrJson["dest"].get<std::string>();
     if (instrJson["type"] == "int") {
-      int32_t value = instrJson["value"].get<int32_t>();
+      int64_t value = instrJson["value"].get<int64_t>();
       auto constOp =
           ConstantOp::create(builder, builder.getUnknownLoc(), value);
       if (llvm::failed(declare(dest, constOp.getResult()))) {

@@ -32,9 +32,9 @@ void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
 }
 
 void ConstantOp::build(OpBuilder &builder, OperationState &state,
-                         int32_t value) {
-  state.addAttribute("value", builder.getI32IntegerAttr(value));
-  state.addTypes(builder.getIntegerType(32));
+                         int64_t value) {
+  state.addAttribute("value", builder.getI64IntegerAttr(value));
+  state.addTypes(builder.getIntegerType(64));
 }
 
 void ConstantOp::build(OpBuilder &builder, OperationState &state,
