@@ -2,6 +2,7 @@ add_mlir_dialect_library(MLIRBril
         BrilOps.cpp
         BrilDialect.cpp
         BrilPasses.cpp
+        BrilTypes.cpp
         MLIRGen.cpp
         MLIR2Bril.cpp
 

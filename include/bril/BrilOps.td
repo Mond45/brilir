@@ -15,6 +15,7 @@ include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
 include "bril/BrilDialect.td"
+include "bril/BrilTypes.td"
 
 def ValidBrilType : AnyTypeOf<[I64, I1]>;
 
@@ -279,5 +280,54 @@ def NopOp : Bril_Op<"nop"> {
     }];
 }
 
+def AllocOp : Bril_Op<"alloc"> {
+    let summary = "Allocates memory.";
+    let description = [{
+        The `bril.alloc` operation allocates memory for a given type.
+    }];
+
+    let arguments = (ins I64:$size);
+    let results = (outs Ptr);
+}
+
+def FreeOp : Bril_Op<"free"> {
+    let summary = "Frees allocated memory.";
+    let description = [{
+        The `bril.free` operation deallocates memory pointed to by a pointer.
+    }];
+
+    let arguments = (ins Ptr:$ptr);
+}
+
+def LoadOp : Bril_Op<"load"> {
+    let summary = "Loads a value from memory.";
+    let description = [{
+        The `bril.load` operation loads a value from the memory location pointed to by a pointer.
+    }];
+
+    let arguments = (ins Ptr:$ptr);
+    let results = (outs ValidBrilType);
+    let hasVerifier = 1;
+}
+
+def StoreOp : Bril_Op<"store"> {
+    let summary = "Stores a value to memory.";
+    let description = [{
+        The `bril.store` operation stores a value to the memory location pointed to by a pointer.
+    }];
+
+    let arguments = (ins Ptr:$ptr, ValidBrilType:$value);
+    let hasVerifier = 1;
+}
+
+def PtrAddOp : Bril_Op<"ptr_add"> {
+    let summary = "Adds an integer offset to a pointer.";
+    let description = [{
+        The `bril.ptr_add` operation takes a pointer and an integer offset, returning a new pointer offset by the given amount.
+    }];
+
+    let arguments = (ins Ptr:$ptr, I64:$offset);
+    let results = (outs Ptr);
+}
 
 #endif // BRIL_OPS

@@ -8,6 +8,8 @@
 
 #include "bril/BrilDialect.h"
 #include "bril/BrilOps.h"
+#include "bril/BrilTypes.h"
+#include "llvm/Support/LogicalResult.h"
 
 using namespace mlir;
 using namespace mlir::bril;
@@ -23,6 +25,7 @@ void BrilDialect::initialize() {
 #define GET_OP_LIST
 #include "bril/BrilOps.cpp.inc"
       >();
+  registerTypes();
 }
 
 void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
@@ -32,13 +35,34 @@ void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
 }
 
 void ConstantOp::build(OpBuilder &builder, OperationState &state,
-                         int64_t value) {
+                       int64_t value) {
   state.addAttribute("value", builder.getI64IntegerAttr(value));
   state.addTypes(builder.getIntegerType(64));
 }
 
-void ConstantOp::build(OpBuilder &builder, OperationState &state,
-                         bool value) {
+void ConstantOp::build(OpBuilder &builder, OperationState &state, bool value) {
   state.addAttribute("value", builder.getBoolAttr(value));
   state.addTypes(builder.getIntegerType(1));
+}
+
+llvm::LogicalResult LoadOp::verify() {
+  auto ptrType = dyn_cast<PtrType>(getPtr().getType());
+  if (!ptrType)
+    return emitOpError("expected 'ptr' type for 'ptr' operand");
+
+  if (getResult().getType() != ptrType.getPointeeType())
+    return emitOpError("result type must match pointee type of pointer");
+
+  return success();
+}
+
+llvm::LogicalResult StoreOp::verify() {
+  auto ptrType = dyn_cast<PtrType>(getPtr().getType());
+  if (!ptrType)
+    return emitOpError("expected 'ptr' type for 'ptr' operand");
+
+  if (getValue().getType() != ptrType.getPointeeType())
+    return emitOpError("value type must match pointee type of pointer");
+
+  return success();
 }
