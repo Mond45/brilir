@@ -277,11 +277,15 @@ private:
             return llvm::failure();
           }
         } else {
-          // otherwise just generate an empty ret
-          nlohmann::json retJson = {{"op", "ret"}};
-          if (llvm::failed(mlirGenRet(retJson))) {
-            func.emitError("failed to generate ret at end of function");
-            return llvm::failure();
+          // otherwise just generate a dummy ret
+          if (!funcJson.contains("type")) {
+            RetOp::create(builder, builder.getUnknownLoc(), mlir::Value{});
+          } else {
+            UndefOp undefOp =
+                UndefOp::create(builder, builder.getUnknownLoc(),
+                                getType(funcJson["type"].get<std::string>()));
+            RetOp::create(builder, builder.getUnknownLoc(),
+                          undefOp.getResult());
           }
         }
       }
