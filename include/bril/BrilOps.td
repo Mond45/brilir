@@ -17,7 +17,7 @@ include "mlir/Interfaces/FunctionInterfaces.td"
 include "bril/BrilDialect.td"
 include "bril/BrilTypes.td"
 
-def ValidBrilType : AnyTypeOf<[I64, I1]>;
+def ValidBrilType : AnyTypeOf<[I64, I1, Ptr]>;
 
 def ConstantOp : Bril_Op<"const", [Pure]> {
     let summary = "Defines a constant value.";
@@ -26,7 +26,7 @@ def ConstantOp : Bril_Op<"const", [Pure]> {
     }];
 
     let arguments = (ins AnyAttrOf<[I64Attr, I1Attr]>:$value);
-    let results = (outs ValidBrilType);
+    let results = (outs AnyTypeOf<[I64, I1]>);
 
     let builders = [OpBuilder<(ins "int64_t":$value)>, OpBuilder<(ins "bool":$value)>];
 }
@@ -270,7 +270,7 @@ def PrintOp : Bril_Op<"print"> {
         The `bril.print` operation outputs the given value to the standard output.
     }];
 
-    let arguments = (ins Variadic<ValidBrilType>:$values);
+    let arguments = (ins Variadic<AnyTypeOf<[I64, I1]>>:$values);
 }
 
 def NopOp : Bril_Op<"nop"> {

@@ -106,11 +106,17 @@ private:
     return mlir::success();
   }
 
-  mlir::Type getType(StringRef type) {
+  mlir::Type getType(const nlohmann::json &type) {
     if (type == "int")
       return builder.getIntegerType(64);
     if (type == "bool")
       return builder.getIntegerType(1);
+    if (type["ptr"] == "int")
+      return mlir::bril::PtrType::get(builder.getContext(),
+                                      builder.getIntegerType(64));
+    if (type["ptr"] == "bool")
+      return mlir::bril::PtrType::get(builder.getContext(),
+                                      builder.getIntegerType(1));
     return nullptr;
   }
 
@@ -159,13 +165,13 @@ private:
 
     mlir::SmallVector<mlir::Type, 4> argTypes = {};
     for (auto &arg : funcJson["args"]) {
-      auto argType = getType(arg["type"].get<std::string>());
+      auto argType = getType(arg["type"]);
       argTypes.push_back(argType);
     }
 
     mlir::TypeRange returnTypes = {};
     if (funcJson.contains("type")) {
-      returnTypes = {getType(funcJson["type"].get<std::string>())};
+      returnTypes = {getType(funcJson["type"])};
     }
 
     builder.setInsertionPointToEnd(theModule.getBody());
@@ -199,9 +205,8 @@ private:
         for (auto &instr : block) {
           // collect all block arguments from 'get' instructions
           if (instr.contains("op") && instr["op"] == "get") {
-            auto blockArg = mlirBlock->addArgument(
-                getType(instr["type"].get<std::string>()),
-                builder.getUnknownLoc());
+            auto blockArg = mlirBlock->addArgument(getType(instr["type"]),
+                                                   builder.getUnknownLoc());
             blockArgNames.push_back(instr["dest"].get<std::string>());
             if (llvm::failed(
                     declare(instr["dest"].get<std::string>(), blockArg))) {
@@ -223,9 +228,8 @@ private:
         for (auto &instr : block) {
           // collect all block arguments from 'get' instructions
           if (instr.contains("op") && instr["op"] == "get") {
-            auto blockArg = mlirBlock->addArgument(
-                getType(instr["type"].get<std::string>()),
-                builder.getUnknownLoc());
+            auto blockArg = mlirBlock->addArgument(getType(instr["type"]),
+                                                   builder.getUnknownLoc());
             blockArgNames.push_back(instr["dest"].get<std::string>());
             if (llvm::failed(
                     declare(instr["dest"].get<std::string>(), blockArg))) {
@@ -278,12 +282,11 @@ private:
           }
         } else {
           // otherwise just generate a dummy ret
-          if (!funcJson.contains("type")) {
+          if (!funcJson.contains("type") || funcJson["type"].contains("ptr")) {
             RetOp::create(builder, builder.getUnknownLoc(), mlir::Value{});
           } else {
-            UndefOp undefOp =
-                UndefOp::create(builder, builder.getUnknownLoc(),
-                                getType(funcJson["type"].get<std::string>()));
+            UndefOp undefOp = UndefOp::create(builder, builder.getUnknownLoc(),
+                                              getType(funcJson["type"]));
             RetOp::create(builder, builder.getUnknownLoc(),
                           undefOp.getResult());
           }
@@ -335,6 +338,16 @@ private:
       return mlirGenNop(instrJson);
     } else if (op == "call") {
       return mlirGenCall(instrJson);
+    } else if (op == "alloc") {
+      return mlirGenAlloc(instrJson);
+    } else if (op == "load") {
+      return mlirGenLoad(instrJson);
+    } else if (op == "store") {
+      return mlirGenStore(instrJson);
+    } else if (op == "free") {
+      return mlirGenFree(instrJson);
+    } else if (op == "ptradd") {
+      return mlirGenPtrAdd(instrJson);
     } else {
       llvm::errs() << "Unhandled operation: " << op << "\n";
     }
@@ -372,9 +385,8 @@ private:
       llvm::errs() << "entering function mlirGenUndef " << instrJson.dump()
                    << "\n";
     auto dest = instrJson["dest"].get<std::string>();
-    auto undefOp =
-        UndefOp::create(builder, builder.getUnknownLoc(),
-                        getType(instrJson["type"].get<std::string>()));
+    auto undefOp = UndefOp::create(builder, builder.getUnknownLoc(),
+                                   getType(instrJson["type"]));
     if (llvm::failed(declare(dest, undefOp.getResult()))) {
       return mlir::failure();
     }
@@ -511,7 +523,7 @@ private:
 
     if (instrJson.contains("dest")) {
       auto dest = instrJson["dest"].get<std::string>();
-      auto type = getType(instrJson["type"].get<std::string>());
+      auto type = getType(instrJson["type"]);
       auto callOp = CallOp::create(
           builder, builder.getUnknownLoc(), type,
           mlir::FlatSymbolRefAttr::get(builder.getContext(), funcName),
@@ -707,6 +719,141 @@ private:
     }
 
     blockInfo->ssaSets[dest] = arg;
+
+    return llvm::success();
+  }
+
+  llvm::LogicalResult mlirGenAlloc(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenAlloc " << instrJson.dump()
+                   << "\n";
+
+    auto dest = instrJson["dest"].get<std::string>();
+    auto sizeName = instrJson["args"][0].get<std::string>();
+
+    if (!symbolTable.count(sizeName)) {
+      llvm::errs() << "Undefined variable in alloc operation: " << sizeName
+                   << "\n";
+      return mlir::failure();
+    }
+    auto size = symbolTable[sizeName];
+
+    auto type = getType(instrJson["type"]);
+
+    auto allocOp =
+        AllocOp::create(builder, builder.getUnknownLoc(), type, size);
+
+    if (llvm::failed(declare(dest, allocOp.getResult()))) {
+      llvm::errs() << "Failed to declare variable: " << dest << "\n";
+      return mlir::failure();
+    }
+
+    return llvm::success();
+  }
+
+  llvm::LogicalResult mlirGenFree(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenFree " << instrJson.dump()
+                   << "\n";
+
+    auto ptrName = instrJson["args"][0].get<std::string>();
+
+    if (!symbolTable.count(ptrName)) {
+      llvm::errs() << "Undefined variable in free operation: " << ptrName
+                   << "\n";
+      return mlir::failure();
+    }
+    auto ptr = symbolTable[ptrName];
+
+    FreeOp::create(builder, builder.getUnknownLoc(), ptr);
+
+    return llvm::success();
+  }
+
+  llvm::LogicalResult mlirGenLoad(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenLoad " << instrJson.dump()
+                   << "\n";
+
+    auto dest = instrJson["dest"].get<std::string>();
+    auto ptrName = instrJson["args"][0].get<std::string>();
+    auto type = getType(instrJson["type"]);
+
+    if (!symbolTable.count(ptrName)) {
+      llvm::errs() << "Undefined variable in load operation: " << ptrName
+                   << "\n";
+      return mlir::failure();
+    }
+    auto ptr = symbolTable[ptrName];
+
+    auto loadOp = LoadOp::create(builder, builder.getUnknownLoc(), type, ptr);
+
+    if (llvm::failed(declare(dest, loadOp.getResult()))) {
+      llvm::errs() << "Failed to declare variable: " << dest << "\n";
+      return mlir::failure();
+    }
+
+    return llvm::success();
+  }
+
+  llvm::LogicalResult mlirGenStore(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenStore " << instrJson.dump()
+                   << "\n";
+
+    auto ptrName = instrJson["args"][0].get<std::string>();
+    auto valueName = instrJson["args"][1].get<std::string>();
+
+    if (!symbolTable.count(ptrName)) {
+      llvm::errs() << "Undefined variable in store operation: " << ptrName
+                   << "\n";
+      return mlir::failure();
+    }
+    auto ptr = symbolTable[ptrName];
+
+    if (!symbolTable.count(valueName)) {
+      llvm::errs() << "Undefined variable in store operation: " << valueName
+                   << "\n";
+      return mlir::failure();
+    }
+    auto value = symbolTable[valueName];
+
+    StoreOp::create(builder, builder.getUnknownLoc(), ptr, value);
+
+    return llvm::success();
+  }
+
+  llvm::LogicalResult mlirGenPtrAdd(nlohmann::json &instrJson) {
+    if (DEBUG)
+      llvm::errs() << "entering function mlirGenPtrAdd " << instrJson.dump()
+                   << "\n";
+
+    auto dest = instrJson["dest"].get<std::string>();
+    auto ptrName = instrJson["args"][0].get<std::string>();
+    auto offsetName = instrJson["args"][1].get<std::string>();
+    auto type = getType(instrJson["type"]);
+
+    if (!symbolTable.count(ptrName)) {
+      llvm::errs() << "Undefined variable in ptradd operation: " << ptrName
+                   << "\n";
+      return mlir::failure();
+    }
+    auto ptr = symbolTable[ptrName];
+
+    if (!symbolTable.count(offsetName)) {
+      llvm::errs() << "Undefined variable in ptradd operation: " << offsetName
+                   << "\n";
+      return mlir::failure();
+    }
+    auto offset = symbolTable[offsetName];
+
+    auto ptrAddOp =
+        PtrAddOp::create(builder, builder.getUnknownLoc(), type, ptr, offset);
+
+    if (llvm::failed(declare(dest, ptrAddOp.getResult()))) {
+      llvm::errs() << "Failed to declare variable: " << dest << "\n";
+      return mlir::failure();
+    }
 
     return llvm::success();
   }

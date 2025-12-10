@@ -1,4 +1,5 @@
 #include "bril/BrilOps.h"
+#include "bril/BrilTypes.h"
 #include "bril/MLIRGen.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -67,11 +68,22 @@ private:
   llvm::DenseMap<mlir::Value, std::string> idMap;
   llvm::DenseMap<mlir::Block *, std::string> blockLabels;
 
-  std::string getTypeString(mlir::Type type) {
+  json getTypeJson(mlir::Type type) {
     if (type.isInteger(64))
       return "int";
     if (type.isInteger(1))
       return "bool";
+    if (auto ptrType = dyn_cast<mlir::bril::PtrType>(type)) {
+      if (ptrType.getPointeeType().isInteger(64))
+        return {{"ptr", "int"}};
+      else if (ptrType.getPointeeType().isInteger(1))
+        return {{"ptr", "bool"}};
+      else {
+        llvm::errs() << "Unsupported pointee type in getTypeJson: "
+                     << ptrType.getPointeeType() << "\n";
+        abort();
+      }
+    }
     llvm::errs() << "Unsupported type in getTypeString: " << type << "\n";
     abort();
   }
@@ -118,7 +130,7 @@ private:
       json instrJson;
       instrJson["op"] = "undef";
       instrJson["dest"] = getId(undefOp.getResult());
-      instrJson["type"] = getTypeString(undefOp.getResult().getType());
+      instrJson["type"] = getTypeJson(undefOp.getResult().getType());
       return instrJson;
     } else if (isa<AddOp>(op) || isa<SubOp>(op) || isa<MulOp>(op) ||
                isa<DivOp>(op) || isa<EqOp>(op) || isa<LtOp>(op) ||
@@ -153,7 +165,7 @@ private:
       for (auto operand : op.getOperands()) {
         instrJson["args"].push_back(getId(operand));
       }
-      instrJson["type"] = getTypeString(op.getResult(0).getType());
+      instrJson["type"] = getTypeJson(op.getResult(0).getType());
 
       return instrJson;
     } else if (auto idOp = dyn_cast<IdOp>(op)) {
@@ -162,7 +174,7 @@ private:
       instrJson["dest"] = getId(idOp.getResult());
       instrJson["args"] = nlohmann::json::array();
       instrJson["args"].push_back(getId(idOp.getInput()));
-      instrJson["type"] = getTypeString(idOp.getResult().getType());
+      instrJson["type"] = getTypeJson(idOp.getResult().getType());
       return instrJson;
     } else if (auto notOp = dyn_cast<NotOp>(op)) {
       json instrJson;
@@ -170,7 +182,7 @@ private:
       instrJson["dest"] = getId(notOp.getResult());
       instrJson["args"] = nlohmann::json::array();
       instrJson["args"].push_back(getId(notOp->getOperand(0)));
-      instrJson["type"] = getTypeString(notOp.getResult().getType());
+      instrJson["type"] = getTypeJson(notOp.getResult().getType());
       return instrJson;
     } else if (auto callOp = dyn_cast<CallOp>(op)) {
       json instrJson;
@@ -183,7 +195,7 @@ private:
       }
       if (!callOp.getResults().empty()) {
         instrJson["dest"] = getId(callOp.getResult(0));
-        instrJson["type"] = getTypeString(callOp.getResult(0).getType());
+        instrJson["type"] = getTypeJson(callOp.getResult(0).getType());
       }
       return instrJson;
     } else if (auto brOp = dyn_cast<BrOp>(op)) {
@@ -275,7 +287,47 @@ private:
       json instrJson;
       instrJson["op"] = "nop";
       return instrJson;
-    } else {
+    } else if (auto allocOp = dyn_cast<AllocOp>(op)) {
+      json instrJson;
+      instrJson["op"] = "alloc";
+      instrJson["dest"] = getId(allocOp.getResult());
+      instrJson["type"] = getTypeJson(allocOp.getResult().getType());
+      instrJson["args"] = nlohmann::json::array();
+      instrJson["args"].push_back(getId(allocOp.getSize()));
+      return instrJson;
+    } else if (auto freeOp = dyn_cast<FreeOp>(op)) {
+      json instrJson;
+      instrJson["op"] = "free";
+      instrJson["args"] = nlohmann::json::array();
+      instrJson["args"].push_back(getId(freeOp.getPtr()));
+      return instrJson;
+    } else if (auto loadOp = dyn_cast<LoadOp>(op)) {
+      json instrJson;
+      instrJson["op"] = "load";
+      instrJson["dest"] = getId(loadOp.getResult());
+      instrJson["type"] = getTypeJson(loadOp.getResult().getType());
+      instrJson["args"] = nlohmann::json::array();
+      instrJson["args"].push_back(getId(loadOp.getPtr()));
+      return instrJson;
+    } else if (auto storeOp = dyn_cast<StoreOp>(op)) {
+      json instrJson;
+      instrJson["op"] = "store";
+      instrJson["args"] = nlohmann::json::array();
+      instrJson["args"].push_back(getId(storeOp.getPtr()));
+      instrJson["args"].push_back(getId(storeOp.getValue()));
+      return instrJson;
+    } else if (auto ptrAddOp = dyn_cast<PtrAddOp>(op)) {
+      json instrJson;
+      instrJson["op"] = "ptradd";
+      instrJson["dest"] = getId(ptrAddOp.getResult());
+      instrJson["type"] = getTypeJson(ptrAddOp.getResult().getType());
+      instrJson["args"] = nlohmann::json::array();
+      instrJson["args"].push_back(getId(ptrAddOp.getPtr()));
+      instrJson["args"].push_back(getId(ptrAddOp.getOffset()));
+      return instrJson;
+    }
+
+    else {
       llvm::errs() << "Unsupported operation in brilGenOp: "
                    << op.getName().getStringRef() << "\n";
     }
@@ -295,7 +347,7 @@ private:
       for (auto arg : block.getArguments()) {
         json getJson = {{"dest", getId(arg)},
                         {"op", "get"},
-                        {"type", getTypeString(arg.getType())}};
+                        {"type", getTypeJson(arg.getType())}};
         blockJson.push_back(getJson);
       }
     }
@@ -328,14 +380,14 @@ private:
     for (auto arg : func.getArguments()) {
       json argJson;
       argJson["name"] = getId(arg);
-      argJson["type"] = getTypeString(arg.getType());
+      argJson["type"] = getTypeJson(arg.getType());
 
       funcJson["args"].push_back(argJson);
     }
 
     if (!func.getFunctionType().getResults().empty()) {
       auto retType = func.getFunctionType().getResult(0);
-      funcJson["type"] = getTypeString(retType);
+      funcJson["type"] = getTypeJson(retType);
     }
 
     for (auto &block : func.getBlocks()) {
