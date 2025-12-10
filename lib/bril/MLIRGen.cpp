@@ -407,7 +407,8 @@ private:
     }
 
     auto arg = symbolTable[argName];
-    auto idOp = IdOp::create(builder, builder.getUnknownLoc(), arg);
+    auto idOp = IdOp::create(builder, builder.getUnknownLoc(),
+                             getType(instrJson["type"]), arg);
 
     if (llvm::failed(declare(dest, idOp.getResult()))) {
       llvm::errs() << "Failed to declare variable: " << dest << "\n";

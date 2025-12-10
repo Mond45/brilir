@@ -31,7 +31,7 @@ def ConstantOp : Bril_Op<"const", [Pure]> {
     let builders = [OpBuilder<(ins "int64_t":$value)>, OpBuilder<(ins "bool":$value)>];
 }
 
-def IdOp : Bril_Op<"id", [Pure, SameOperandsAndResultType]> {
+def IdOp : Bril_Op<"id", [Pure]> {
     let summary = "Identity operation.";
     let description = [{
         The `bril.id` operation returns its input operand unchanged.

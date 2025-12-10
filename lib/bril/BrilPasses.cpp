@@ -6,17 +6,30 @@
 //
 //===----------------------------------------------------------------------===//
 #include "bril/BrilOps.h"
+#include "bril/BrilTypes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Ptr/IR/PtrAttrs.h"
+#include "mlir/Dialect/Ptr/IR/PtrOps.h"
+#include "mlir/Dialect/Ptr/IR/PtrTypes.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Types.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 
 #include "bril/BrilPasses.h"
@@ -53,13 +66,26 @@ struct IdOpConversion : public OpConversionPattern<bril::IdOp> {
   LogicalResult
   matchAndRewrite(bril::IdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    auto const0 = arith::ConstantIntOp::create(
-        rewriter, op.getLoc(), 0,
-        op.getResult().getType().isInteger(64) ? 64 : 1);
-    auto add0 =
-        arith::AddIOp::create(rewriter, op.getLoc(), op.getInput(), const0);
-    rewriter.replaceOp(op, add0.getResult());
-
+    if (op.getResult().getType().isInteger()) {
+      auto const0 = arith::ConstantIntOp::create(
+          rewriter, op.getLoc(), 0,
+          op.getResult().getType().isInteger(64) ? 64 : 1);
+      auto add0 =
+          arith::AddIOp::create(rewriter, op.getLoc(), op.getInput(), const0);
+      rewriter.replaceOp(op, add0.getResult());
+    } else {
+      auto zeroIdx = LLVM::GEPArg(0);
+      auto brilPtrType = dyn_cast<bril::PtrType>(op.getInput().getType());
+      if (!brilPtrType) {
+        op.emitError("Expected pointer type for IdOp input");
+        return failure();
+      }
+      auto gepOp = mlir::LLVM::GEPOp::create(
+          rewriter, op.getLoc(),
+          LLVM::LLVMPointerType::get(rewriter.getContext()),
+          brilPtrType.getPointeeType(), adaptor.getInput(), {zeroIdx});
+      rewriter.replaceOp(op, gepOp.getResult());
+    }
     return success();
   }
 };
@@ -70,8 +96,13 @@ struct UndefOpConversion : public OpConversionPattern<bril::UndefOp> {
   LogicalResult
   matchAndRewrite(bril::UndefOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    auto zeroAttr = rewriter.getIntegerAttr(op->getResult(0).getType(), 0);
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, zeroAttr);
+    if (op.getResult().getType().isInteger()) {
+      auto zeroAttr = rewriter.getIntegerAttr(op->getResult(0).getType(), 0);
+      rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, zeroAttr);
+    } else {
+      rewriter.replaceOpWithNewOp<LLVM::ZeroOp>(
+          op, LLVM::LLVMPointerType::get(rewriter.getContext()));
+    }
     return success();
   }
 };
@@ -151,8 +182,14 @@ struct CallOpConversion : public OpConversionPattern<bril::CallOp> {
   LogicalResult
   matchAndRewrite(bril::CallOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
+    llvm::SmallVector<Type> newResultTypes;
+    if (failed(
+            typeConverter->convertTypes(op.getResultTypes(), newResultTypes))) {
+      op->emitError("Failed to convert result types in CallOp");
+      return failure();
+    }
     rewriter.replaceOpWithNewOp<func::CallOp>(
-        op, op.getCallee(), op.getResultTypes(), op.getOperands());
+        op, op.getCallee(), newResultTypes, adaptor.getOperands());
     return success();
   }
 };
@@ -164,7 +201,7 @@ struct JmpOpConversion : public OpConversionPattern<bril::JmpOp> {
   matchAndRewrite(bril::JmpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
     rewriter.replaceOpWithNewOp<cf::BranchOp>(op, op.getTarget(),
-                                              op->getOperands());
+                                              adaptor.getOperands());
     return success();
   }
 };
@@ -176,8 +213,8 @@ struct BrOpConversion : public OpConversionPattern<bril::BrOp> {
   matchAndRewrite(bril::BrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
     rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
-        op, op.getCondition(), op.getTrueTarget(), op.getTrueArgs(),
-        op.getFalseTarget(), op.getFalseArgs());
+        op, op.getCondition(), op.getTrueTarget(), adaptor.getTrueArgs(),
+        op.getFalseTarget(), adaptor.getFalseArgs());
     return success();
   }
 };
@@ -188,14 +225,29 @@ struct FuncOpConversion : public OpConversionPattern<bril::FuncOp> {
   LogicalResult
   matchAndRewrite(bril::FuncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    auto funcType =
-        rewriter.getFunctionType(op.getArgumentTypes(), op.getResultTypes());
-    auto newFuncOp =
-        func::FuncOp::create(rewriter, op.getLoc(), op.getName(), funcType);
 
+    SmallVector<Type> newArgTypes, newResultTypes;
+    if (failed(
+            typeConverter->convertTypes(op.getArgumentTypes(), newArgTypes)) ||
+        failed(
+            typeConverter->convertTypes(op.getResultTypes(), newResultTypes))) {
+      op->emitError("Failed to convert function argument or result types");
+      return failure();
+    }
+
+    auto newFuncType = rewriter.getFunctionType(newArgTypes, newResultTypes);
+
+    auto newFuncOp =
+        func::FuncOp::create(rewriter, op.getLoc(), op.getName(), newFuncType);
     // Inline the body of the old function into the new function.
     rewriter.inlineRegionBefore(op.getBody(), newFuncOp.getBody(),
                                 newFuncOp.end());
+
+    if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(),
+                                           *typeConverter))) {
+      op->emitError("Failed to convert function body types");
+      return failure();
+    }
 
     rewriter.eraseOp(op);
     return success();
@@ -208,7 +260,7 @@ struct RetOpConversion : public OpConversionPattern<bril::RetOp> {
   LogicalResult
   matchAndRewrite(bril::RetOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<func::ReturnOp>(op, op.getOperands());
+    rewriter.replaceOpWithNewOp<func::ReturnOp>(op, adaptor.getOperands());
     return success();
   }
 };
@@ -335,16 +387,143 @@ private:
   }
 };
 
-class MainFunctionRewriter : public OpRewritePattern<func::FuncOp> {
-public:
-  using OpRewritePattern<func::FuncOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(func::FuncOp op,
-                                PatternRewriter &rewriter) const final {
-    if (op.getSymName() == "main") {
-      rewriter.modifyOpInPlace(op, [&op]() { op.setSymName("bril_main"); });
-      return success();
-    }
-    return failure();
+struct AllocOpConversion : public OpConversionPattern<bril::AllocOp> {
+  using OpConversionPattern<bril::AllocOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::AllocOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+
+    // replace with malloc
+    ModuleOp parentModule = op->getParentOfType<ModuleOp>();
+    auto mallocRef = getOrInsertMalloc(rewriter, parentModule);
+
+    auto sizeofType = arith::ConstantIntOp::create(
+        rewriter, loc,
+        (op.getType().getPointeeType().getIntOrFloatBitWidth() + 7) / 8, 64);
+    auto sizeInBytes =
+        arith::MulIOp::create(rewriter, loc, op.getSize(), sizeofType);
+
+    auto mallocCall = LLVM::CallOp::create(
+        rewriter, loc, getMallocType(rewriter.getContext()), mallocRef,
+        ArrayRef<Value>({sizeInBytes.getResult()}));
+
+    rewriter.replaceOp(op, mallocCall.getResult());
+
+    return success();
+  }
+
+private:
+  static LLVM::LLVMFunctionType getMallocType(MLIRContext *context) {
+    auto llvmI64Ty = IntegerType::get(context, 64);
+    auto llvmPtrTy = LLVM::LLVMPointerType::get(context);
+    auto llvmFnType = LLVM::LLVMFunctionType::get(llvmPtrTy, {llvmI64Ty});
+    return llvmFnType;
+  }
+
+  /// Return a symbol reference to the malloc function, inserting it into the
+  /// module if necessary.
+  static FlatSymbolRefAttr getOrInsertMalloc(PatternRewriter &rewriter,
+                                             ModuleOp module) {
+    auto *context = module.getContext();
+    if (module.lookupSymbol<LLVM::LLVMFuncOp>("malloc"))
+      return SymbolRefAttr::get(context, "malloc");
+
+    // Insert the malloc function into the body of the parent module.
+    PatternRewriter::InsertionGuard insertGuard(rewriter);
+    rewriter.setInsertionPointToStart(module.getBody());
+    LLVM::LLVMFuncOp::create(rewriter, module.getLoc(), "malloc",
+                             getMallocType(context));
+    return SymbolRefAttr::get(context, "malloc");
+  }
+};
+
+struct FreeOpConversion : public OpConversionPattern<bril::FreeOp> {
+  using OpConversionPattern<bril::FreeOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::FreeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+
+    auto parentModule = op->getParentOfType<ModuleOp>();
+    auto freeRef = getOrInsertFree(rewriter, parentModule);
+
+    auto ptr = adaptor.getPtr();
+
+    LLVM::CallOp::create(rewriter, loc, getFreeType(rewriter.getContext()),
+                         freeRef, ArrayRef<Value>({ptr}));
+
+    rewriter.eraseOp(op);
+
+    return success();
+  }
+
+private:
+  static LLVM::LLVMFunctionType getFreeType(MLIRContext *context) {
+    auto llvmPtrTy = LLVM::LLVMPointerType::get(context);
+    auto llvmVoidType = LLVM::LLVMVoidType::get(context);
+    auto llvmFnType = LLVM::LLVMFunctionType::get(llvmVoidType, {llvmPtrTy});
+    return llvmFnType;
+  }
+
+  /// Return a symbol reference to the free function, inserting it into the
+  /// module if necessary.
+  static FlatSymbolRefAttr getOrInsertFree(PatternRewriter &rewriter,
+                                           ModuleOp module) {
+    auto *context = module.getContext();
+    if (module.lookupSymbol<LLVM::LLVMFuncOp>("free"))
+      return SymbolRefAttr::get(context, "free");
+
+    // Insert the free function into the body of the parent module.
+    PatternRewriter::InsertionGuard insertGuard(rewriter);
+    rewriter.setInsertionPointToStart(module.getBody());
+    LLVM::LLVMFuncOp::create(rewriter, module.getLoc(), "free",
+                             getFreeType(context));
+    return SymbolRefAttr::get(context, "free");
+  }
+};
+
+struct LoadOpConversion : public OpConversionPattern<bril::LoadOp> {
+  using OpConversionPattern<bril::LoadOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::LoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto loadOp = mlir::LLVM::LoadOp::create(
+        rewriter, op.getLoc(), op.getResult().getType(), adaptor.getPtr());
+    rewriter.replaceOp(op, loadOp.getResult());
+    return success();
+  }
+};
+
+struct StoreOpConversion : public OpConversionPattern<bril::StoreOp> {
+  using OpConversionPattern<bril::StoreOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::StoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+
+    rewriter.replaceOpWithNewOp<mlir::LLVM::StoreOp>(op, adaptor.getValue(),
+                                                     adaptor.getPtr());
+    return success();
+  }
+};
+
+struct PtrAddOpConversion : public OpConversionPattern<bril::PtrAddOp> {
+  using OpConversionPattern<bril::PtrAddOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(bril::PtrAddOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto getElemPtrOp = mlir::LLVM::GEPOp::create(
+        rewriter, op.getLoc(),
+        LLVM::LLVMPointerType::get(rewriter.getContext()),
+        op.getPtr().getType().getPointeeType(), adaptor.getPtr(),
+        ArrayRef<Value>({op.getOffset()}));
+    rewriter.replaceOp(op, getElemPtrOp.getResult());
+    return success();
   }
 };
 } // namespace
@@ -362,33 +541,28 @@ public:
 
     target.addIllegalDialect<mlir::bril::BrilDialect>();
 
+    TypeConverter typeConverter;
+    typeConverter.addConversion([](Type type) { return type; });
+    typeConverter.addConversion([&](bril::PtrType type) -> Type {
+      auto llvmPtrType = LLVM::LLVMPointerType::get(&getContext());
+      return llvmPtrType;
+    });
+
     RewritePatternSet patterns(&getContext());
-    patterns.add<ConstantOpConversion>(&getContext());
-    patterns.add<IdOpConversion>(&getContext());
-    patterns.add<UndefOpConversion>(&getContext());
-    patterns.add<AddOpConversion>(&getContext());
-    patterns.add<SubOpConversion>(&getContext());
-    patterns.add<MulOpConversion>(&getContext());
-    patterns.add<DivOpConversion>(&getContext());
-    patterns.add<EqOpConversion>(&getContext());
-    patterns.add<LtOpConversion>(&getContext());
-    patterns.add<GtOpConversion>(&getContext());
-    patterns.add<LeOpConversion>(&getContext());
-    patterns.add<GeOpConversion>(&getContext());
-    patterns.add<AndOpConversion>(&getContext());
-    patterns.add<OrOpConversion>(&getContext());
-    patterns.add<NotOpConversion>(&getContext());
-    patterns.add<CallOpConversion>(&getContext());
-    patterns.add<JmpOpConversion>(&getContext());
-    patterns.add<BrOpConversion>(&getContext());
-    patterns.add<FuncOpConversion>(&getContext());
-    patterns.add<RetOpConversion>(&getContext());
-    patterns.add<NopOpConversion>(&getContext());
-    patterns.add<PrintOpConversion>(&getContext());
+    patterns
+        .add<ConstantOpConversion, IdOpConversion, UndefOpConversion,
+             AddOpConversion, SubOpConversion, MulOpConversion, DivOpConversion,
+             EqOpConversion, LtOpConversion, GtOpConversion, LeOpConversion,
+             GeOpConversion, AndOpConversion, OrOpConversion, NotOpConversion,
+             CallOpConversion, JmpOpConversion, BrOpConversion,
+             FuncOpConversion, RetOpConversion, NopOpConversion,
+             PrintOpConversion, AllocOpConversion, FreeOpConversion,
+             LoadOpConversion, StoreOpConversion, PtrAddOpConversion>(
+            typeConverter, &getContext());
 
     FrozenRewritePatternSet patternSet(std::move(patterns));
 
-    if (failed(applyFullConversion(getOperation(), target, patternSet)))
+    if (failed(applyPartialConversion(getOperation(), target, patternSet)))
       signalPassFailure();
   }
 };
