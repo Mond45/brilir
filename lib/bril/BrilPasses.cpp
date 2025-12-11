@@ -74,17 +74,10 @@ struct IdOpConversion : public OpConversionPattern<bril::IdOp> {
           arith::AddIOp::create(rewriter, op.getLoc(), op.getInput(), const0);
       rewriter.replaceOp(op, add0.getResult());
     } else {
-      auto zeroIdx = LLVM::GEPArg(0);
-      auto brilPtrType = dyn_cast<bril::PtrType>(op.getInput().getType());
-      if (!brilPtrType) {
-        op.emitError("Expected pointer type for IdOp input");
-        return failure();
-      }
-      auto gepOp = mlir::LLVM::GEPOp::create(
+      auto bitcastOp = LLVM::BitcastOp::create(
           rewriter, op.getLoc(),
-          LLVM::LLVMPointerType::get(rewriter.getContext()),
-          brilPtrType.getPointeeType(), adaptor.getInput(), {zeroIdx});
-      rewriter.replaceOp(op, gepOp.getResult());
+          LLVM::LLVMPointerType::get(rewriter.getContext()), adaptor.getInput());
+      rewriter.replaceOp(op, bitcastOp.getResult());
     }
     return success();
   }

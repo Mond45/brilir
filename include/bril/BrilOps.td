@@ -255,7 +255,7 @@ def FuncOp : Bril_Op<"func", [FunctionOpInterface, IsolatedFromAbove]> {
     let skipDefaultBuilders = 1;
 }
 
-def RetOp : Bril_Op<"ret", [Pure, Terminator, HasParent<"FuncOp">]> {
+def RetOp : Bril_Op<"ret", [Pure, Terminator]> {
     let summary = "Return from a function.";
     let description = [{
         The `bril.ret` operation returns control from a function, optionally returning a value.
