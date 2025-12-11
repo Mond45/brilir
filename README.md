@@ -1,6 +1,6 @@
 # An out-of-tree MLIR dialect for Bril
 
-This is an out-of-tree [MLIR](https://mlir.llvm.org/) dialect for [Bril](https://capra.cs.cornell.edu/bril/intro.html) along with a standalone `opt`-like tool to operate on Bril dialect.
+This repo contains an out-of-tree [MLIR](https://mlir.llvm.org/) dialect for [Bril](https://capra.cs.cornell.edu/bril/intro.html) a standalone `opt`-like tool to operate on Bril dialect, and conversion tools for translating between Bril and MLIR (`bril2mlir` and `mlir2bril`).
 
 ## Building
 
@@ -33,4 +33,13 @@ mkdir build
 cd build
 cmake -G Ninja .. -DMLIR_DIR=$PREFIX/lib/cmake/mlir -DLLVM_EXTERNAL_LIT=$BUILD_DIR/bin/llvm-lit -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_CCACHE_BUILD=ON
 cmake --build .
+```
+
+## Example Usage
+
+```sh
+bril2mlir < bril_input.json 2>&1 | mlir2bril | bril2txt
+
+bril2mlir < bril_input.json 2>&1 | bril-opt --pass-pipeline="builtin.module(convert-bril-to-std,rename-main-function,convert-arith-to-llvm,convert-func-to-llvm,convert-cf-to-llvm,finalize-memref-to-llvm,canonicalize,cse)" - | mlir-translate --mlir-to-llvmir - -o output.ll
+clang++ output.ll main.cpp
 ```
